@@ -5,10 +5,10 @@ TIM_HandleTypeDef htim2;
 
 // PWM configuration for PA0, PA1, PA2, PA3
 static const PWM_Config_t pwm_configs[] = {
-    {.channel = PWM_PA0_CHANNEL, .frequency = 50, .resolution = 1000, .pulse_width_percentage = 50},
-    {.channel = PWM_PA1_CHANNEL, .frequency = 50, .resolution = 1000, .pulse_width_percentage = 50},
-    {.channel = PWM_PA2_CHANNEL, .frequency = 50, .resolution = 1000, .pulse_width_percentage = 50},
-    {.channel = PWM_PA3_CHANNEL, .frequency = 50, .resolution = 1000, .pulse_width_percentage = 50}};
+    {.channel = PWM_PA0_CHANNEL, .frequency = 50, .resolution = 1000, .duty_cycle = 50},
+    {.channel = PWM_PA1_CHANNEL, .frequency = 50, .resolution = 1000, .duty_cycle = 50},
+    {.channel = PWM_PA2_CHANNEL, .frequency = 50, .resolution = 1000, .duty_cycle = 50},
+    {.channel = PWM_PA3_CHANNEL, .frequency = 50, .resolution = 1000, .duty_cycle = 50}};
 
 void PWM_Init(void)
 {
@@ -41,9 +41,8 @@ void PWM_Init(void)
   // Configure PWM channels
   TIM_OC_InitTypeDef sConfigOC = {0};
   sConfigOC.OCMode = TIM_OCMODE_PWM1;
-  // Convert pulse width percentage to compare value: 0%=1ms, 100%=2ms
-  // For 50Hz (20ms period) with 1000 resolution: 1ms = 50, 2ms = 100
-  sConfigOC.Pulse = 50 + (pwm_configs[0].pulse_width_percentage * 50) / 100;
+  // Convert duty cycle to compare value: duty_cycle% of resolution
+  sConfigOC.Pulse = (pwm_configs[0].duty_cycle * pwm_configs[0].resolution) / 100;
   sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
   sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
 
@@ -69,14 +68,13 @@ void PWM_Init(void)
   }
 }
 
-void PWM_SetPulseWidthPercentage(uint32_t channel, uint32_t pulse_width_percentage)
+void PWM_SetDutyCycle(uint32_t channel, uint32_t duty_cycle)
 {
-  if (pulse_width_percentage > 100)
-    pulse_width_percentage = 100;
+  if (duty_cycle > 100)
+    duty_cycle = 100;
 
-  // Convert pulse width percentage to compare value: 0%=1ms, 100%=2ms
-  // For 50Hz (20ms period) with 1000 resolution: 1ms = 50, 2ms = 100
-  uint32_t pulse = 50 + (pulse_width_percentage * 50) / 100;
+  // Convert duty cycle to compare value: duty_cycle% of resolution
+  uint32_t pulse = (duty_cycle * pwm_configs[0].resolution) / 100;
 
   switch (channel)
   {
