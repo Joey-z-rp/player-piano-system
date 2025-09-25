@@ -35,7 +35,7 @@ typedef struct
 
 // Function declarations
 void PWM_Init(void);
-void PWM_SetDutyCycle(uint32_t channel, uint32_t duty_cycle);
+void PWM_SetDutyCycle(uint8_t channel_index, uint32_t duty_cycle); // channel_index: 0-11 (0=PA0, 1=PA1, 2=PA2, 3=PA3, 4=PA6, 5=PA7, 6=PB0, 7=PB1, 8=PB6, 9=PB7, 10=PB8, 11=PB9)
 void PWM_Start(void);
 void PWM_Stop(void);
 
