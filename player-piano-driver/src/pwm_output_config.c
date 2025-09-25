@@ -112,21 +112,3 @@ void PWM_Stop(void)
   HAL_TIM_PWM_Stop(&htim2, PWM_PA2_CHANNEL);
   HAL_TIM_PWM_Stop(&htim2, PWM_PA3_CHANNEL);
 }
-
-void PWM_SetFrequency(uint32_t frequency)
-{
-  if (frequency == 0)
-    return;
-
-  // Stop PWM before changing frequency
-  PWM_Stop();
-
-  // Calculate new prescaler value
-  uint32_t prescaler = (SystemCoreClock / (frequency * htim2.Init.Period)) - 1;
-
-  // Update timer configuration
-  __HAL_TIM_SET_PRESCALER(&htim2, prescaler);
-
-  // Restart PWM
-  PWM_Start();
-}

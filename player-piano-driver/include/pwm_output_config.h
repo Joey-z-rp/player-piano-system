@@ -25,7 +25,6 @@ void PWM_Init(void);
 void PWM_SetPulseWidthPercentage(uint32_t channel, uint32_t pulse_width_percentage);
 void PWM_Start(void);
 void PWM_Stop(void);
-void PWM_SetFrequency(uint32_t frequency);
 
 // External timer handles for main access
 extern TIM_HandleTypeDef htim2;
