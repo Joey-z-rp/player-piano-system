@@ -5,10 +5,10 @@ TIM_HandleTypeDef htim2;
 
 // PWM configuration for PA0, PA1, PA2, PA3
 static const PWM_Config_t pwm_configs[] = {
-    {.channel = PWM_PA0_CHANNEL, .frequency = 50, .resolution = 1000, .duty_cycle = 50},
-    {.channel = PWM_PA1_CHANNEL, .frequency = 50, .resolution = 1000, .duty_cycle = 50},
-    {.channel = PWM_PA2_CHANNEL, .frequency = 50, .resolution = 1000, .duty_cycle = 50},
-    {.channel = PWM_PA3_CHANNEL, .frequency = 50, .resolution = 1000, .duty_cycle = 50}};
+    {.channel = PWM_PA0_CHANNEL, .frequency = 20000, .resolution = 100, .duty_cycle = 50},
+    {.channel = PWM_PA1_CHANNEL, .frequency = 20000, .resolution = 100, .duty_cycle = 50},
+    {.channel = PWM_PA2_CHANNEL, .frequency = 20000, .resolution = 100, .duty_cycle = 50},
+    {.channel = PWM_PA3_CHANNEL, .frequency = 20000, .resolution = 100, .duty_cycle = 50}};
 
 void PWM_Init(void)
 {
