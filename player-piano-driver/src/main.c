@@ -11,38 +11,37 @@ int main(void)
   // Initialize HAL
   HAL_Init();
 
-  // Initialize system (clock, GPIO, timers)
-  if (System_Init() != SYSTEM_OK)
-  {
-    // System initialization failed
-    while (1)
-      ;
-  }
+  System_Init();
+  PWM_Init();
 
-  // Initialize PWM module
-  if (PWM_Init() != PWM_OK)
-  {
-    // PWM initialization failed
-    while (1)
-      ;
-  }
+  uint8_t duty_cycle = 0;
 
   // Main application loop
   while (1)
   {
-    // Example: Set different duty cycles for demonstration
-    PWM_SetDutyCycle(PWM_CHANNEL_0, 25);  // 25% duty cycle
-    PWM_SetDutyCycle(PWM_CHANNEL_1, 50);  // 50% duty cycle
-    PWM_SetDutyCycle(PWM_CHANNEL_2, 75);  // 75% duty cycle
-    PWM_SetDutyCycle(PWM_CHANNEL_3, 100); // 100% duty cycle
+    if (duty_cycle == 0)
+      duty_cycle = 70;
+    else
+      duty_cycle = 0;
 
-    // Your player piano control logic goes here
-    // For example:
-    // - Read MIDI input
-    // - Process note events
-    // - Update PWM duty cycles based on note velocity
-    // - Handle timing and sequencing
+    PWM_SetDutyCycle(PWM_CHANNEL_0, duty_cycle);
+    PWM_SetDutyCycle(PWM_CHANNEL_1, duty_cycle);
+    PWM_SetDutyCycle(PWM_CHANNEL_2, duty_cycle);
+    PWM_SetDutyCycle(PWM_CHANNEL_3, duty_cycle);
+    PWM_SetDutyCycle(PWM_CHANNEL_4, duty_cycle);
+    PWM_SetDutyCycle(PWM_CHANNEL_5, duty_cycle);
+    PWM_SetDutyCycle(PWM_CHANNEL_6, duty_cycle);
+    PWM_SetDutyCycle(PWM_CHANNEL_7, duty_cycle);
+    PWM_SetDutyCycle(PWM_CHANNEL_8, duty_cycle);
+    PWM_SetDutyCycle(PWM_CHANNEL_9, duty_cycle);
+    PWM_SetDutyCycle(PWM_CHANNEL_10, duty_cycle);
+    PWM_SetDutyCycle(PWM_CHANNEL_11, duty_cycle);
 
-    HAL_Delay(100); // Small delay for demonstration
+    HAL_Delay(1000);
   }
+}
+
+void SysTick_Handler(void)
+{
+  HAL_IncTick();
 }
