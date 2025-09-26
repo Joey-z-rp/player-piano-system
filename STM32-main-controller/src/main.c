@@ -14,7 +14,7 @@ int main(void)
   }
 
   // Example message to send
-  char message[] = "Hello from STM32!\r\n";
+  char message[] = "@";
 
   while (1)
   {
