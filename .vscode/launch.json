@@ -1,0 +1,57 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "platformio-debug",
+            "request": "launch",
+            "name": "Debug Player Piano Driver",
+            "executable": "/Users/joeyzheng/repos/player-piano-system/player-piano-driver/.pio/build/bluepill_f103c8/firmware.elf",
+            "projectEnvName": "bluepill_f103c8",
+            "toolchainBinDir": "/Users/joeyzheng/.platformio/packages/toolchain-gccarmnoneeabi/bin",
+            "internalConsoleOptions": "openOnSessionStart",
+            "svdPath": "/Users/joeyzheng/.platformio/platforms/ststm32/misc/svd/STM32F103xx.svd",
+            "preLaunchTask": {
+                "type": "PlatformIO",
+                "task": "Pre-Debug"
+            },
+            "cwd": "/Users/joeyzheng/repos/player-piano-system/player-piano-driver"
+        },
+        {
+            "type": "platformio-debug",
+            "request": "launch",
+            "name": "Debug STM32 Main Controller",
+            "executable": "/Users/joeyzheng/repos/player-piano-system/STM32-main-controller/.pio/build/bluepill_f103c8/firmware.elf",
+            "projectEnvName": "bluepill_f103c8",
+            "toolchainBinDir": "/Users/joeyzheng/.platformio/packages/toolchain-gccarmnoneeabi/bin",
+            "internalConsoleOptions": "openOnSessionStart",
+            "svdPath": "/Users/joeyzheng/.platformio/platforms/ststm32/misc/svd/STM32F103xx.svd",
+            "preLaunchTask": {
+                "type": "PlatformIO",
+                "task": "Pre-Debug"
+            },
+            "cwd": "/Users/joeyzheng/repos/player-piano-system/STM32-main-controller"
+        },
+        {
+            "type": "platformio-debug",
+            "request": "launch",
+            "name": "Debug Player Piano Driver (skip Pre-Debug)",
+            "executable": "/Users/joeyzheng/repos/player-piano-system/player-piano-driver/.pio/build/bluepill_f103c8/firmware.elf",
+            "projectEnvName": "bluepill_f103c8",
+            "toolchainBinDir": "/Users/joeyzheng/.platformio/packages/toolchain-gccarmnoneeabi/bin",
+            "internalConsoleOptions": "openOnSessionStart",
+            "svdPath": "/Users/joeyzheng/.platformio/platforms/ststm32/misc/svd/STM32F103xx.svd",
+            "cwd": "/Users/joeyzheng/repos/player-piano-system/player-piano-driver"
+        },
+        {
+            "type": "platformio-debug",
+            "request": "launch",
+            "name": "Debug STM32 Main Controller (skip Pre-Debug)",
+            "executable": "/Users/joeyzheng/repos/player-piano-system/STM32-main-controller/.pio/build/bluepill_f103c8/firmware.elf",
+            "projectEnvName": "bluepill_f103c8",
+            "toolchainBinDir": "/Users/joeyzheng/.platformio/packages/toolchain-gccarmnoneeabi/bin",
+            "internalConsoleOptions": "openOnSessionStart",
+            "svdPath": "/Users/joeyzheng/.platformio/platforms/ststm32/misc/svd/STM32F103xx.svd",
+            "cwd": "/Users/joeyzheng/repos/player-piano-system/STM32-main-controller"
+        }
+    ]
+}
