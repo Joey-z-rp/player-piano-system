@@ -34,7 +34,6 @@ HAL_StatusTypeDef RS485_Init(void)
  */
 HAL_StatusTypeDef RS485_ReceiveString(char *buffer, uint16_t buffer_size, uint32_t timeout)
 {
-  HAL_StatusTypeDef status;
   uint32_t start_time = HAL_GetTick();
 
   // Clear buffer
@@ -89,11 +88,7 @@ void RS485_UART_Init(void)
   __HAL_RCC_GPIOB_CLK_ENABLE();
   __HAL_RCC_GPIOA_CLK_ENABLE();
 
-  // Configure UART pins (PB10 = TX, PB11 = RX)
-  GPIO_InitStruct.Pin = GPIO_PIN_10;
-  GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
-  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+  // Configure UART pin (PB11 = RX)
 
   GPIO_InitStruct.Pin = GPIO_PIN_11;
   GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
@@ -114,6 +109,10 @@ void RS485_UART_Init(void)
   {
     // Error handling - could be improved with proper error reporting
   }
+
+  // Enable UART interrupt in NVIC
+  HAL_NVIC_SetPriority(USART3_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(USART3_IRQn);
 }
 
 /**
@@ -132,6 +131,9 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 {
   if (huart->Instance == RS485_UART_INSTANCE)
   {
+    // Toggle LED to indicate UART interrupt received
+    HAL_GPIO_TogglePin(GPIOC, GPIO_PIN_13);
+
     // Check for end of message
     if (rx_buffer[rx_index] == '\n' || rx_buffer[rx_index] == '\r')
     {
