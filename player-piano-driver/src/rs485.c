@@ -26,48 +26,6 @@ HAL_StatusTypeDef RS485_Init(void)
 }
 
 /**
- * @brief Receive string via RS485 (blocking)
- * @param buffer: Buffer to store received string
- * @param buffer_size: Size of the buffer
- * @param timeout: Timeout in milliseconds
- * @return HAL status
- */
-HAL_StatusTypeDef RS485_ReceiveString(char *buffer, uint16_t buffer_size, uint32_t timeout)
-{
-  uint32_t start_time = HAL_GetTick();
-
-  // Clear buffer
-  memset(buffer, 0, buffer_size);
-
-  // Wait for data with timeout
-  while (HAL_GetTick() - start_time < timeout)
-  {
-    if (__HAL_UART_GET_FLAG(&huart3, UART_FLAG_RXNE))
-    {
-      uint8_t byte;
-      if (HAL_UART_Receive(&huart3, &byte, 1, 10) == HAL_OK)
-      {
-        if (rx_index < buffer_size - 1)
-        {
-          buffer[rx_index] = byte;
-          rx_index++;
-
-          // Check for end of message (newline or carriage return)
-          if (byte == '\n' || byte == '\r')
-          {
-            buffer[rx_index] = '\0';
-            rx_index = 0;
-            return HAL_OK;
-          }
-        }
-      }
-    }
-  }
-
-  return HAL_TIMEOUT;
-}
-
-/**
  * @brief Start receiving data (non-blocking)
  * @return HAL status
  */

@@ -14,7 +14,7 @@ int main(void)
   }
 
   // Example message to send
-  char message[] = "@";
+  char message[] = "P:C4:127\n";
 
   while (1)
   {

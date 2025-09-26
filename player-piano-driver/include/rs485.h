@@ -11,7 +11,6 @@
 
 // Function prototypes
 HAL_StatusTypeDef RS485_Init(void);
-HAL_StatusTypeDef RS485_ReceiveString(char *buffer, uint16_t buffer_size, uint32_t timeout);
 HAL_StatusTypeDef RS485_StartReceive(void);
 void RS485_UART_Init(void);
 
