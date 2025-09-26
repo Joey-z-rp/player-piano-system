@@ -5,6 +5,9 @@
 #include "rs485.h"
 #include "command_parser.h"
 
+static uint32_t last_update_time = 0;
+static const uint32_t UPDATE_INTERVAL_MS = 1;
+
 int main(void)
 {
   HAL_Init();
@@ -16,14 +19,21 @@ int main(void)
   KeyDriver_Init(&g_key_driver);
   CommandParser_Init(&g_key_driver);
 
-  // Main loop
+  last_update_time = HAL_GetTick();
+
+  // Main loop - non-blocking
   while (1)
   {
-    // Update key driver state machine
-    KeyDriver_Update(&g_key_driver);
+    uint32_t current_time = HAL_GetTick();
 
-    // Small delay to prevent excessive CPU usage
-    HAL_Delay(1);
+    if ((current_time - last_update_time) >= UPDATE_INTERVAL_MS)
+    {
+      KeyDriver_Update(&g_key_driver);
+
+      CommandParser_ProcessQueue(CommandParser_GetQueue(), &g_key_driver);
+
+      last_update_time = current_time;
+    }
   }
 }
 

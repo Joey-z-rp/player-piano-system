@@ -95,9 +95,6 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 {
   if (huart->Instance == RS485_UART_INSTANCE)
   {
-    // Toggle LED to indicate UART interrupt received
-    HAL_GPIO_TogglePin(GPIOC, GPIO_PIN_13);
-
     // Check for end of message
     if (rx_buffer[rx_index] == '\n' || rx_buffer[rx_index] == '\r')
     {

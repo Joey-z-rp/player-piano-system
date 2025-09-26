@@ -4,6 +4,9 @@
 #include <stdio.h>
 #include <ctype.h>
 
+// Global command queue
+static CommandQueue_t g_command_queue;
+
 // Note to semitone mapping within an octave (A=9, B=11, C=0, D=2, E=4, F=5, G=7)
 static const int NOTE_TO_SEMITONE[] = {
     9,  // A (index 0)
@@ -168,10 +171,7 @@ void CommandParser_ExecuteCommand(const ParsedCommand_t *command, KeyDriverModul
 // Internal callback function for RS485 messages
 static void CommandParser_RS485Callback(const char *message, uint16_t length)
 {
-  // Get the key driver instance from the module's internal state
-  extern KeyDriverModule_t g_key_driver;
-
-  if (message == NULL || &g_key_driver == NULL)
+  if (message == NULL)
   {
     return;
   }
@@ -180,9 +180,8 @@ static void CommandParser_RS485Callback(const char *message, uint16_t length)
   ParsedCommand_t parsed_command;
   if (CommandParser_ParseMessage(message, length, &parsed_command) == HAL_OK)
   {
-    // Execute the parsed command
-    CommandParser_ExecuteCommand(&parsed_command, &g_key_driver);
-    return;
+    // Queue the parsed command for processing in main loop
+    CommandQueue_Enqueue(&g_command_queue, &parsed_command);
   }
 }
 
@@ -194,6 +193,148 @@ void CommandParser_Init(KeyDriverModule_t *key_driver)
     return;
   }
 
+  // Initialize the command queue
+  CommandQueue_Init(&g_command_queue);
+
   // Set up the RS485 callback to use our internal handler
   RS485_SetMessageCallback(CommandParser_RS485Callback);
+}
+
+// ============================================================================
+// Command Queue Management Functions
+// ============================================================================
+
+/**
+ * @brief Initialize command queue
+ * @param queue: Pointer to queue structure
+ * @return HAL status
+ */
+HAL_StatusTypeDef CommandQueue_Init(CommandQueue_t *queue)
+{
+  if (queue == NULL)
+  {
+    return HAL_ERROR;
+  }
+
+  queue->head = 0;
+  queue->tail = 0;
+  queue->count = 0;
+
+  return HAL_OK;
+}
+
+/**
+ * @brief Add command to queue
+ * @param queue: Pointer to queue structure
+ * @param command: Pointer to command to enqueue
+ * @return HAL status
+ */
+HAL_StatusTypeDef CommandQueue_Enqueue(CommandQueue_t *queue, const ParsedCommand_t *command)
+{
+  if (queue == NULL || command == NULL)
+  {
+    return HAL_ERROR;
+  }
+
+  // Check if queue is full
+  if (CommandQueue_IsFull(queue))
+  {
+    return HAL_ERROR; // Queue overflow
+  }
+
+  // Add command to queue
+  queue->commands[queue->tail] = *command;
+  queue->tail = (queue->tail + 1) % COMMAND_QUEUE_SIZE;
+  queue->count++;
+
+  return HAL_OK;
+}
+
+/**
+ * @brief Remove command from queue
+ * @param queue: Pointer to queue structure
+ * @param command: Pointer to store dequeued command
+ * @return HAL status
+ */
+HAL_StatusTypeDef CommandQueue_Dequeue(CommandQueue_t *queue, ParsedCommand_t *command)
+{
+  if (queue == NULL || command == NULL)
+  {
+    return HAL_ERROR;
+  }
+
+  // Check if queue is empty
+  if (CommandQueue_IsEmpty(queue))
+  {
+    return HAL_ERROR; // Queue empty
+  }
+
+  // Remove command from queue
+  *command = queue->commands[queue->head];
+  queue->head = (queue->head + 1) % COMMAND_QUEUE_SIZE;
+  queue->count--;
+
+  return HAL_OK;
+}
+
+/**
+ * @brief Check if queue is empty
+ * @param queue: Pointer to queue structure
+ * @return 1 if empty, 0 if not empty
+ */
+uint8_t CommandQueue_IsEmpty(const CommandQueue_t *queue)
+{
+  if (queue == NULL)
+  {
+    return 1;
+  }
+
+  return (queue->count == 0);
+}
+
+/**
+ * @brief Check if queue is full
+ * @param queue: Pointer to queue structure
+ * @return 1 if full, 0 if not full
+ */
+uint8_t CommandQueue_IsFull(const CommandQueue_t *queue)
+{
+  if (queue == NULL)
+  {
+    return 1;
+  }
+
+  return (queue->count >= COMMAND_QUEUE_SIZE);
+}
+
+/**
+ * @brief Process all commands in the queue
+ * @param queue: Pointer to queue structure
+ * @param key_driver: Pointer to key driver module
+ */
+void CommandParser_ProcessQueue(CommandQueue_t *queue, KeyDriverModule_t *key_driver)
+{
+  if (queue == NULL || key_driver == NULL)
+  {
+    return;
+  }
+
+  // Process all commands in the queue
+  while (!CommandQueue_IsEmpty(queue))
+  {
+    ParsedCommand_t command;
+    if (CommandQueue_Dequeue(queue, &command) == HAL_OK)
+    {
+      CommandParser_ExecuteCommand(&command, key_driver);
+    }
+  }
+}
+
+/**
+ * @brief Get pointer to global command queue (for external access)
+ * @return Pointer to global command queue
+ */
+CommandQueue_t *CommandParser_GetQueue(void)
+{
+  return &g_command_queue;
 }
