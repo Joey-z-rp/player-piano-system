@@ -3,24 +3,6 @@
 // Global key driver instance
 KeyDriverModule_t g_key_driver;
 
-// Velocity to duty cycle mapping function
-// Maps velocity (0-127) to initial duty cycle (0-100)
-uint8_t KeyDriver_MapVelocityToDutyCycle(uint8_t velocity)
-{
-  // Clamp velocity to valid range
-  if (velocity > MAX_VELOCITY)
-  {
-    velocity = MAX_VELOCITY;
-  }
-
-  // Map velocity (0-127) to duty cycle (20-80)
-  // Minimum duty cycle of 20% for any key press
-  // Maximum duty cycle of 80% for maximum velocity
-  uint8_t duty_cycle = 20 + ((velocity * 60) / MAX_VELOCITY);
-
-  return duty_cycle;
-}
-
 // Initialize the key driver module
 void KeyDriver_Init(KeyDriverModule_t *key_driver)
 {
@@ -42,25 +24,28 @@ void KeyDriver_Init(KeyDriverModule_t *key_driver)
   key_driver->hold_duty_cycle = HOLD_DUTY_CYCLE;
 }
 
-// Press a key with specified velocity
-void KeyDriver_PressKey(KeyDriverModule_t *key_driver, uint8_t key, uint8_t velocity)
+// Press a key with specified duty cycle
+void KeyDriver_PressKey(KeyDriverModule_t *key_driver, uint8_t key, uint8_t duty_cycle)
 {
   if (key_driver == NULL || key >= NUM_KEYS)
   {
     return;
   }
 
-  // Map velocity to initial duty cycle
-  uint8_t initial_duty_cycle = KeyDriver_MapVelocityToDutyCycle(velocity);
+  // Clamp duty cycle to valid range (0-100)
+  if (duty_cycle > 100)
+  {
+    duty_cycle = 100;
+  }
 
   // Set key state to initial strike
   key_driver->keys[key].state = KEY_STATE_INITIAL_STRIKE;
   key_driver->keys[key].initial_strike_start_time = HAL_GetTick();
-  key_driver->keys[key].initial_duty_cycle = initial_duty_cycle;
+  key_driver->keys[key].initial_duty_cycle = duty_cycle;
   key_driver->keys[key].hold_duty_cycle = HOLD_DUTY_CYCLE;
 
   // Immediately set the initial duty cycle
-  PWM_SetDutyCycle(key, initial_duty_cycle);
+  PWM_SetDutyCycle(key, duty_cycle);
 }
 
 // Release a key (set duty cycle to 0)
