@@ -11,11 +11,20 @@ static CommandQueue_t g_command_queue;
 
 HAL_StatusTypeDef CommandParser_ParseMessage(const char *message, uint16_t length, ParsedCommand_t *command)
 {
-  // Expected format: "P:0:100" or "R:0:0"
+  // Expected formats:
+  // "P:0:100" - channel 0, duty cycle 100, default timing
+  // "P:0:100:50" - channel 0, duty cycle 100, initial strike time 50ms
+  // "P:0:100:50:80:100" - channel 0, duty cycle 100, initial strike 50ms, follow-up duty 80, follow-up time 100ms
+  // "R:0:0" - release channel 0
   if (message == NULL || command == NULL || length < 5) // Minimum length for "P:0:0"
   {
     return HAL_ERROR;
   }
+
+  // Initialize command with defaults
+  command->initial_strike_time = 0; // 0 means use default
+  command->followup_duty_cycle = 0; // 0 means no follow-up
+  command->followup_time = 0;       // 0 means no follow-up
 
   // Parse command type (P or R)
   if (message[0] == 'P')
@@ -60,7 +69,7 @@ HAL_StatusTypeDef CommandParser_ParseMessage(const char *message, uint16_t lengt
     return HAL_ERROR;
   }
 
-  // Parse duty cycle
+  // Parse initial duty cycle
   i++; // Skip the colon
   int duty_cycle = 0;
   while (i < length && isdigit(message[i]))
@@ -76,6 +85,50 @@ HAL_StatusTypeDef CommandParser_ParseMessage(const char *message, uint16_t lengt
   }
 
   command->duty_cycle = duty_cycle;
+
+  // For release commands, we're done
+  if (command->type == COMMAND_RELEASE)
+  {
+    return HAL_OK;
+  }
+
+  // Parse optional parameters for press commands
+  while (i < length && message[i] == ':')
+  {
+    i++; // Skip the colon
+
+    // Parse next parameter
+    int param_value = 0;
+    while (i < length && isdigit(message[i]))
+    {
+      param_value = param_value * 10 + (message[i] - '0');
+      i++;
+    }
+
+    // Determine which parameter this is based on current state
+    if (command->initial_strike_time == 0) // First optional parameter
+    {
+      command->initial_strike_time = param_value;
+    }
+    else if (command->followup_duty_cycle == 0) // Second optional parameter
+    {
+      command->followup_duty_cycle = param_value;
+    }
+    else if (command->followup_time == 0) // Third optional parameter
+    {
+      command->followup_time = param_value;
+    }
+    else
+    {
+      return HAL_ERROR; // Too many parameters
+    }
+  }
+
+  // Validate follow-up duty cycle if specified
+  if (command->followup_duty_cycle < 0 || command->followup_duty_cycle > 100)
+  {
+    return HAL_ERROR;
+  }
 
   return HAL_OK;
 }
@@ -95,7 +148,9 @@ void CommandParser_ExecuteCommand(const ParsedCommand_t *command, KeyDriverModul
 
   if (command->type == COMMAND_PRESS)
   {
-    KeyDriver_PressKey(key_driver, command->channel, command->duty_cycle);
+    KeyDriver_PressKey(key_driver, command->channel, command->duty_cycle,
+                       command->initial_strike_time, command->followup_duty_cycle,
+                       command->followup_time);
   }
   else if (command->type == COMMAND_RELEASE)
   {

@@ -16,6 +16,7 @@ typedef enum
 {
   KEY_STATE_IDLE = 0,
   KEY_STATE_INITIAL_STRIKE,
+  KEY_STATE_FOLLOWUP,
   KEY_STATE_HOLD
 } KeyState_t;
 
@@ -24,8 +25,12 @@ typedef struct
 {
   KeyState_t state;
   uint32_t initial_strike_start_time;
+  uint32_t followup_start_time;
   uint8_t initial_duty_cycle;
+  uint8_t followup_duty_cycle;
   uint8_t hold_duty_cycle;
+  uint16_t initial_strike_time_ms;
+  uint16_t followup_time_ms;
 } KeyDriver_t;
 
 // Key driver module structure
@@ -37,7 +42,7 @@ typedef struct
 
 // Function declarations
 void KeyDriver_Init(KeyDriverModule_t *key_driver);
-void KeyDriver_PressKey(KeyDriverModule_t *key_driver, uint8_t key, uint8_t duty_cycle);
+void KeyDriver_PressKey(KeyDriverModule_t *key_driver, uint8_t key, uint8_t duty_cycle, uint16_t initial_strike_time, uint8_t followup_duty_cycle, uint16_t followup_time);
 void KeyDriver_ReleaseKey(KeyDriverModule_t *key_driver, uint8_t key);
 void KeyDriver_Update(KeyDriverModule_t *key_driver);
 

@@ -18,8 +18,11 @@ typedef enum
 typedef struct
 {
   CommandType_t type;
-  uint8_t channel;    // Direct channel (0-11 for 12 channels)
-  uint8_t duty_cycle; // Direct duty cycle (0-100)
+  uint8_t channel;              // Direct channel (0-11 for 12 channels)
+  uint8_t duty_cycle;           // Initial duty cycle (0-100)
+  uint16_t initial_strike_time; // Initial strike time in ms (0 = use default)
+  uint8_t followup_duty_cycle;  // Follow-up duty cycle (0-100, 0 = no follow-up)
+  uint16_t followup_time;       // Follow-up time in ms (0 = no follow-up)
 } ParsedCommand_t;
 
 // Command queue structure
