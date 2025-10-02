@@ -42,7 +42,7 @@ typedef struct
 
 // Function declarations
 void KeyDriver_Init(KeyDriverModule_t *key_driver);
-void KeyDriver_PressKey(KeyDriverModule_t *key_driver, uint8_t key, uint8_t duty_cycle, uint16_t initial_strike_time, uint8_t followup_duty_cycle, uint16_t followup_time);
+void KeyDriver_PressKey(KeyDriverModule_t *key_driver, uint8_t key, uint8_t duty_cycle, uint16_t initial_strike_time, uint8_t followup_duty_cycle, uint16_t followup_time, uint8_t hold_duty_cycle);
 void KeyDriver_ReleaseKey(KeyDriverModule_t *key_driver, uint8_t key);
 void KeyDriver_Update(KeyDriverModule_t *key_driver);
 

@@ -29,7 +29,7 @@ void KeyDriver_Init(KeyDriverModule_t *key_driver)
 }
 
 // Press a key with specified duty cycle and optional timing parameters
-void KeyDriver_PressKey(KeyDriverModule_t *key_driver, uint8_t key, uint8_t duty_cycle, uint16_t initial_strike_time, uint8_t followup_duty_cycle, uint16_t followup_time)
+void KeyDriver_PressKey(KeyDriverModule_t *key_driver, uint8_t key, uint8_t duty_cycle, uint16_t initial_strike_time, uint8_t followup_duty_cycle, uint16_t followup_time, uint8_t hold_duty_cycle)
 {
   if (key_driver == NULL || key >= NUM_KEYS)
   {
@@ -48,13 +48,19 @@ void KeyDriver_PressKey(KeyDriverModule_t *key_driver, uint8_t key, uint8_t duty
     followup_duty_cycle = 100;
   }
 
+  // Clamp hold duty cycle to valid range (0-100)
+  if (hold_duty_cycle > 100)
+  {
+    hold_duty_cycle = 100;
+  }
+
   // Set key state to initial strike
   key_driver->keys[key].state = KEY_STATE_INITIAL_STRIKE;
   key_driver->keys[key].initial_strike_start_time = HAL_GetTick();
   key_driver->keys[key].followup_start_time = 0;
   key_driver->keys[key].initial_duty_cycle = duty_cycle;
   key_driver->keys[key].followup_duty_cycle = followup_duty_cycle;
-  key_driver->keys[key].hold_duty_cycle = HOLD_DUTY_CYCLE;
+  key_driver->keys[key].hold_duty_cycle = (hold_duty_cycle > 0) ? hold_duty_cycle : HOLD_DUTY_CYCLE;
 
   // Set timing parameters (use defaults if 0)
   key_driver->keys[key].initial_strike_time_ms = (initial_strike_time > 0) ? initial_strike_time : INITIAL_STRIKE_TIME_MS;

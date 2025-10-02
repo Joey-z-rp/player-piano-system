@@ -15,6 +15,7 @@ HAL_StatusTypeDef CommandParser_ParseMessage(const char *message, uint16_t lengt
   // "P:0:100" - channel 0, duty cycle 100, default timing
   // "P:0:100:50" - channel 0, duty cycle 100, initial strike time 50ms
   // "P:0:100:50:80:100" - channel 0, duty cycle 100, initial strike 50ms, follow-up duty 80, follow-up time 100ms
+  // "P:0:100:50:80:100:30" - channel 0, duty cycle 100, initial strike 50ms, follow-up duty 80, follow-up time 100ms, hold duty 30
   // "R:0:0" - release channel 0
   if (message == NULL || command == NULL || length < 5) // Minimum length for "P:0:0"
   {
@@ -25,6 +26,7 @@ HAL_StatusTypeDef CommandParser_ParseMessage(const char *message, uint16_t lengt
   command->initial_strike_time = 0; // 0 means use default
   command->followup_duty_cycle = 0; // 0 means no follow-up
   command->followup_time = 0;       // 0 means no follow-up
+  command->hold_duty_cycle = 0;     // 0 means use default
 
   // Parse command type (P or R)
   if (message[0] == 'P')
@@ -118,6 +120,10 @@ HAL_StatusTypeDef CommandParser_ParseMessage(const char *message, uint16_t lengt
     {
       command->followup_time = param_value;
     }
+    else if (command->hold_duty_cycle == 0) // Fourth optional parameter
+    {
+      command->hold_duty_cycle = param_value;
+    }
     else
     {
       return HAL_ERROR; // Too many parameters
@@ -126,6 +132,12 @@ HAL_StatusTypeDef CommandParser_ParseMessage(const char *message, uint16_t lengt
 
   // Validate follow-up duty cycle if specified
   if (command->followup_duty_cycle < 0 || command->followup_duty_cycle > 100)
+  {
+    return HAL_ERROR;
+  }
+
+  // Validate hold duty cycle if specified
+  if (command->hold_duty_cycle < 0 || command->hold_duty_cycle > 100)
   {
     return HAL_ERROR;
   }
@@ -150,7 +162,7 @@ void CommandParser_ExecuteCommand(const ParsedCommand_t *command, KeyDriverModul
   {
     KeyDriver_PressKey(key_driver, command->channel, command->duty_cycle,
                        command->initial_strike_time, command->followup_duty_cycle,
-                       command->followup_time);
+                       command->followup_time, command->hold_duty_cycle);
   }
   else if (command->type == COMMAND_RELEASE)
   {
