@@ -72,13 +72,14 @@ void ButtonModule_Update(ButtonModule_t *button)
         // Send appropriate command based on state change
         if (button->current_state == BUTTON_STATE_PRESSED)
         {
+          // Max duty cycle 80
           // Button pressed - send "P:0:100\n"
-          RS485_SendString("P:0:100\n");
+          RS485_SendString("P:11:80\n");
         }
         else
         {
           // Button released - send "R:0:0\n"
-          RS485_SendString("R:0:0\n");
+          RS485_SendString("R:11:0\n");
         }
       }
     }
