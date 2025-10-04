@@ -3,6 +3,8 @@
 // GPIO System Configuration
 static const GPIO_PinConfig_t system_pins[] = {
     {.port = GPIOC, .pin = GPIO_PIN_13, .mode = GPIO_MODE_OUTPUT_PP, .pull = GPIO_PULLUP, .speed = GPIO_SPEED_FREQ_HIGH}, // LED pin
+    {.port = GPIOC, .pin = GPIO_PIN_15, .mode = GPIO_MODE_OUTPUT_PP, .pull = GPIO_PULLUP, .speed = GPIO_SPEED_FREQ_HIGH}, // DIR pin
+    {.port = GPIOC, .pin = GPIO_PIN_14, .mode = GPIO_MODE_OUTPUT_PP, .pull = GPIO_PULLUP, .speed = GPIO_SPEED_FREQ_HIGH}, // PULSE pin
 };
 
 void GPIO_Init(void)
