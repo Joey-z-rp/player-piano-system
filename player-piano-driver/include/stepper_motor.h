@@ -10,7 +10,7 @@
 #define STEPPER_DIR_PORT GPIOC
 
 // Speed limits
-#define STEPPER_MAX_SPEED_STEPS_PER_SEC 1000
+#define STEPPER_MAX_SPEED_STEPS_PER_SEC 1500
 #define STEPPER_MIN_SPEED_STEPS_PER_SEC 100
 
 // Direction definitions
@@ -41,11 +41,11 @@ uint8_t StepperMotor_IsMoving(StepperMotor_t *motor);
 uint32_t StepperMotor_GetPosition(StepperMotor_t *motor);
 
 // Low-level step functions
-void StepperMotor_Step(StepperMotor_t *motor);
 void StepperMotor_SetSpeed(StepperMotor_t *motor, uint32_t speed_steps_per_sec);
 
-// Utility functions
-void delayMicroseconds(uint32_t us);
-uint32_t calculateStepDelay(uint32_t speed_steps_per_sec);
+// Non-blocking step pulse functions
+void StepperMotor_StepPulseUpdate(void);
+void StepperMotor_StartStepPulse(void);
+uint8_t StepperMotor_IsStepPulseComplete(void);
 
 #endif // STEPPER_MOTOR_H

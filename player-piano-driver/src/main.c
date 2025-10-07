@@ -7,7 +7,6 @@
 #include "stepper_motor.h"
 
 static uint32_t last_update_time = 0;
-static const uint32_t UPDATE_INTERVAL_MS = 1;
 
 // Stepper motor demo variables
 static uint32_t demo_start_time = 0;
@@ -39,13 +38,14 @@ int main(void)
   {
     uint32_t current_time = HAL_GetTick();
 
-    if ((current_time - last_update_time) >= UPDATE_INTERVAL_MS)
+    // Always update stepper motor for accurate timing
+    StepperMotor_Update(&g_stepper_motor);
+
+    // Update other systems at 1ms intervals
+    if ((current_time - last_update_time) >= 1)
     {
       KeyDriver_Update(&g_key_driver);
       CommandParser_ProcessQueue(CommandParser_GetQueue(), &g_key_driver);
-
-      // Update stepper motor
-      StepperMotor_Update(&g_stepper_motor);
 
       if ((current_time - demo_start_time) >= 150)
       {

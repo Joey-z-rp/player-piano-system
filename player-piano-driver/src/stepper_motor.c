@@ -1,4 +1,5 @@
 #include "stepper_motor.h"
+#include "core_cm3.h" // For DWT registers
 
 // Global stepper motor instance
 StepperMotor_t g_stepper_motor;
@@ -7,20 +8,26 @@ StepperMotor_t g_stepper_motor;
 static uint32_t step_delay_us = 1000; // Default delay
 static uint32_t last_step_time = 0;
 
-// Accurate microsecond delay function
-void delayMicroseconds(uint32_t us)
+// State machine for step pulse generation
+typedef enum
 {
-  // Simple delay for STM32F1 (72MHz)
-  uint32_t delay_cycles = us * 18; // 72MHz / 4 = 18 cycles per microsecond
-  volatile uint32_t count = 0;
-  while (count < delay_cycles)
-  {
-    count++;
-  }
+  STEP_IDLE,
+  STEP_PULSE_HIGH,
+  STEP_PULSE_LOW
+} step_state_t;
+
+static step_state_t step_state = STEP_IDLE;
+static uint32_t step_pulse_start_time = 0;
+
+// Get current time in microseconds using DWT
+static uint32_t getMicroseconds(void)
+{
+  // Convert cycles to microseconds using SystemCoreClock
+  return DWT->CYCCNT / (SystemCoreClock / 1000000);
 }
 
 // Calculate step delay based on speed
-uint32_t calculateStepDelay(uint32_t speed_steps_per_sec)
+static uint32_t calculateStepDelay(uint32_t speed_steps_per_sec)
 {
   if (speed_steps_per_sec == 0)
     return 1000000;                     // 1 second delay if speed is 0
@@ -30,6 +37,11 @@ uint32_t calculateStepDelay(uint32_t speed_steps_per_sec)
 // Initialize stepper motor
 void StepperMotor_Init(StepperMotor_t *motor)
 {
+  // Enable DWT counter for microsecond timing
+  CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+  DWT->CYCCNT = 0;
+  DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
+
   motor->current_position = 0;
   motor->target_position = 0;
   motor->current_speed = STEPPER_MIN_SPEED_STEPS_PER_SEC;
@@ -111,44 +123,90 @@ void StepperMotor_SetSpeed(StepperMotor_t *motor, uint32_t speed_steps_per_sec)
   step_delay_us = calculateStepDelay(motor->current_speed);
 }
 
-// Execute a single step
-void StepperMotor_Step(StepperMotor_t *motor)
+// Non-blocking step pulse state machine
+void StepperMotor_StepPulseUpdate(void)
 {
-  // Generate step pulse (minimum 2.5μs high, 2.5μs low for TB6600)
-  HAL_GPIO_WritePin(STEPPER_STEP_PORT, STEPPER_STEP_PIN, GPIO_PIN_SET);
-  delayMicroseconds(10); // 10μs high pulse for better reliability
-  HAL_GPIO_WritePin(STEPPER_STEP_PORT, STEPPER_STEP_PIN, GPIO_PIN_RESET);
+  uint32_t current_time = getMicroseconds();
 
-  // Update position
-  if (motor->direction == STEPPER_DIR_CW)
+  switch (step_state)
   {
-    motor->current_position++;
+  case STEP_IDLE:
+    // Nothing to do
+    break;
+
+  case STEP_PULSE_HIGH:
+    // Check if high pulse time has elapsed (10μs minimum)
+    if ((current_time - step_pulse_start_time) >= 10)
+    {
+      HAL_GPIO_WritePin(STEPPER_STEP_PORT, STEPPER_STEP_PIN, GPIO_PIN_RESET);
+      step_state = STEP_PULSE_LOW;
+      step_pulse_start_time = current_time;
+    }
+    break;
+
+  case STEP_PULSE_LOW:
+    // Check if low pulse time has elapsed (2.5μs minimum)
+    if ((current_time - step_pulse_start_time) >= 3)
+    {
+      step_state = STEP_IDLE;
+    }
+    break;
   }
-  else
+}
+
+// Start a step pulse (non-blocking)
+void StepperMotor_StartStepPulse(void)
+{
+  if (step_state == STEP_IDLE)
   {
-    motor->current_position--;
+    HAL_GPIO_WritePin(STEPPER_STEP_PORT, STEPPER_STEP_PIN, GPIO_PIN_SET);
+    step_state = STEP_PULSE_HIGH;
+    step_pulse_start_time = getMicroseconds();
   }
+}
+
+// Check if step pulse is complete
+uint8_t StepperMotor_IsStepPulseComplete(void)
+{
+  return (step_state == STEP_IDLE);
 }
 
 // Update stepper motor (call this in main loop)
 void StepperMotor_Update(StepperMotor_t *motor)
 {
-  // Use millisecond timing for simplicity
-  uint32_t current_time = HAL_GetTick();
-  uint32_t step_delay_ms = step_delay_us / 1000; // Convert microseconds to milliseconds
+  // Update step pulse state machine
+  StepperMotor_StepPulseUpdate();
+
+  // Use microsecond timing for better accuracy
+  uint32_t current_time = getMicroseconds();
 
   // Check if it's time for the next step
-  if ((current_time - last_step_time) >= step_delay_ms)
+  if ((current_time - last_step_time) >= step_delay_us)
   {
     if (motor->is_moving && motor->current_position != motor->target_position)
     {
-      StepperMotor_Step(motor);
-      last_step_time = current_time;
-
-      // Check if we've completed all steps
-      if (motor->current_position == motor->target_position)
+      // Only start a new step pulse if the previous one is complete
+      if (StepperMotor_IsStepPulseComplete())
       {
-        motor->is_moving = 0;
+        StepperMotor_StartStepPulse();
+
+        // Update position
+        if (motor->direction == STEPPER_DIR_CW)
+        {
+          motor->current_position++;
+        }
+        else
+        {
+          motor->current_position--;
+        }
+
+        last_step_time = current_time;
+
+        // Check if we've completed all steps
+        if (motor->current_position == motor->target_position)
+        {
+          motor->is_moving = 0;
+        }
       }
     }
   }
