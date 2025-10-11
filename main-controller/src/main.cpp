@@ -69,52 +69,56 @@ void OnPitchBend(byte channel, int bend)
 // MIDI parsing function
 void parseMIDI(std::string data)
 {
-  if (data.length() < 2)
+  if (data.length() < 3)
     return;
 
-  uint8_t status = data[0];
+  uint8_t status = data[2];
+
   uint8_t channel = status & 0x0F;
   uint8_t command = status & 0xF0;
 
   switch (command)
   {
   case 0x80: // Note Off
-    if (data.length() >= 3)
+    if (data.length() >= 5)
     {
-      OnNoteOff(channel, data[1], data[2]);
+      OnNoteOff(channel, data[3], data[4]);
     }
     break;
   case 0x90: // Note On
-    if (data.length() >= 3)
+    if (data.length() >= 5)
     {
-      if (data[2] == 0)
+      if (data[4] == 0)
       {
-        OnNoteOff(channel, data[1], 0);
+        OnNoteOff(channel, data[3], 0);
       }
       else
       {
-        OnNoteOn(channel, data[1], data[2]);
+        OnNoteOn(channel, data[3], data[4]);
       }
     }
     break;
   case 0xB0: // Control Change
-    if (data.length() >= 3)
+    if (data.length() >= 5)
     {
-      OnControlChange(channel, data[1], data[2]);
+      OnControlChange(channel, data[3], data[4]);
     }
     break;
   case 0xC0: // Program Change
-    if (data.length() >= 2)
+    if (data.length() >= 4)
     {
-      OnProgramChange(channel, data[1]);
+      OnProgramChange(channel, data[3]);
     }
     break;
   case 0xE0: // Pitch Bend
-    if (data.length() >= 3)
+    if (data.length() >= 5)
     {
-      int bend = (data[2] << 7) | data[1];
+      int bend = (data[4] << 7) | data[3];
       OnPitchBend(channel, bend);
     }
+    break;
+  default:
+    Serial.printf("Unknown MIDI command: 0x%02X\n", command);
     break;
   }
 }
@@ -160,7 +164,7 @@ class MyCallbacks : public BLECharacteristicCallbacks
 void setup()
 {
   // Initialize serial communication for debugging
-  Serial.begin(9600);
+  Serial.begin(115200);
 
   // Initialize FastLED with GPIO 48
   FastLED.addLeds<WS2812B, LED_PIN, GRB>(leds, NUM_LEDS);
@@ -205,17 +209,6 @@ void setup()
   pAdvertising->setMinPreferred(0x06); // helps some devices connect
   pAdvertising->setMaxPreferred(0x12);
   BLEDevice::startAdvertising();
-
-  Serial.println("BLE MIDI device 'ESP32-S3 Piano' is ready!");
-  Serial.println("Connect from Synthesia app to start receiving MIDI messages");
-  Serial.println("LED will show different colors for different MIDI events:");
-  Serial.println("  Green = Note On");
-  Serial.println("  Red = Note Off");
-  Serial.println("  Blue = Control Change");
-  Serial.println("  Yellow = Program Change");
-  Serial.println("  Purple = Pitch Bend");
-  Serial.println("  White = Connected");
-  Serial.println("  Black = Disconnected");
 
   // Clear LED initially
   leds[0] = CRGB::Black;
