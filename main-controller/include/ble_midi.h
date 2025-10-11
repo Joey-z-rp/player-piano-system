@@ -6,7 +6,9 @@
 #include <BLEServer.h>
 #include <BLEUtils.h>
 #include <BLE2902.h>
-#include <FastLED.h>
+
+// Forward declaration
+class LedControl;
 
 // BLE MIDI Service UUID (standard MIDI over BLE)
 #define BLE_MIDI_SERVICE_UUID "03B80E5A-EDE8-4B33-A751-6CE34EC4C700"
@@ -19,7 +21,7 @@ public:
   ~BleMidiModule();
 
   // Initialize BLE MIDI service
-  bool begin(const char *deviceName, CRGB *leds, uint8_t numLeds);
+  bool init(const char *deviceName, LedControl *ledControl);
 
   // Check if device is connected
   bool isConnected() const;
@@ -38,8 +40,7 @@ private:
   BLEServer *pServer;
   BLECharacteristic *pCharacteristic;
   bool deviceConnected;
-  CRGB *leds;
-  uint8_t numLeds;
+  LedControl *ledControl;
 
   // BLE Server Callbacks
   class MyServerCallbacks : public BLEServerCallbacks

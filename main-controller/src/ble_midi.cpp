@@ -1,6 +1,7 @@
 #include "ble_midi.h"
+#include "led_control.h"
 
-BleMidiModule::BleMidiModule() : pServer(nullptr), pCharacteristic(nullptr), deviceConnected(false), leds(nullptr), numLeds(0)
+BleMidiModule::BleMidiModule() : pServer(nullptr), pCharacteristic(nullptr), deviceConnected(false), ledControl(nullptr)
 {
 }
 
@@ -9,10 +10,9 @@ BleMidiModule::~BleMidiModule()
   // Cleanup if needed
 }
 
-bool BleMidiModule::begin(const char *deviceName, CRGB *leds, uint8_t numLeds)
+bool BleMidiModule::init(const char *deviceName, LedControl *ledControl)
 {
-  this->leds = leds;
-  this->numLeds = numLeds;
+  this->ledControl = ledControl;
 
   // Initialize BLE
   BLEDevice::init(deviceName);
@@ -62,61 +62,26 @@ bool BleMidiModule::isConnected() const
 void BleMidiModule::onNoteOn(byte channel, byte note, byte velocity)
 {
   Serial.printf("Note On - Channel: %d, Note: %d, Velocity: %d\n", channel, note, velocity);
-
-  // Visual feedback - LED turns green for note on
-  if (leds && numLeds > 0)
-  {
-    leds[0] = CRGB::Green;
-    FastLED.show();
-  }
 }
 
 void BleMidiModule::onNoteOff(byte channel, byte note, byte velocity)
 {
   Serial.printf("Note Off - Channel: %d, Note: %d, Velocity: %d\n", channel, note, velocity);
-
-  // Visual feedback - LED turns red for note off
-  if (leds && numLeds > 0)
-  {
-    leds[0] = CRGB::Red;
-    FastLED.show();
-  }
 }
 
 void BleMidiModule::onControlChange(byte channel, byte control, byte value)
 {
   Serial.printf("Control Change - Channel: %d, Control: %d, Value: %d\n", channel, control, value);
-
-  // Visual feedback - LED turns blue for control change
-  if (leds && numLeds > 0)
-  {
-    leds[0] = CRGB::Blue;
-    FastLED.show();
-  }
 }
 
 void BleMidiModule::onProgramChange(byte channel, byte program)
 {
   Serial.printf("Program Change - Channel: %d, Program: %d\n", channel, program);
-
-  // Visual feedback - LED turns yellow for program change
-  if (leds && numLeds > 0)
-  {
-    leds[0] = CRGB::Yellow;
-    FastLED.show();
-  }
 }
 
 void BleMidiModule::onPitchBend(byte channel, int bend)
 {
   Serial.printf("Pitch Bend - Channel: %d, Bend: %d\n", channel, bend);
-
-  // Visual feedback - LED turns purple for pitch bend
-  if (leds && numLeds > 0)
-  {
-    leds[0] = CRGB::Purple;
-    FastLED.show();
-  }
 }
 
 void BleMidiModule::processMidiData(std::string data)
@@ -185,10 +150,9 @@ void BleMidiModule::MyServerCallbacks::onConnect(BLEServer *pServer)
 {
   module->deviceConnected = true;
   Serial.println("BLE MIDI Connected!");
-  if (module->leds && module->numLeds > 0)
+  if (module->ledControl)
   {
-    module->leds[0] = CRGB::White;
-    FastLED.show();
+    module->ledControl->set(CRGB::White);
   }
 }
 
@@ -196,10 +160,9 @@ void BleMidiModule::MyServerCallbacks::onDisconnect(BLEServer *pServer)
 {
   module->deviceConnected = false;
   Serial.println("BLE MIDI Disconnected!");
-  if (module->leds && module->numLeds > 0)
+  if (module->ledControl)
   {
-    module->leds[0] = CRGB::Black;
-    FastLED.show();
+    module->ledControl->set(CRGB::Black);
   }
 
   // Restart advertising after disconnection
