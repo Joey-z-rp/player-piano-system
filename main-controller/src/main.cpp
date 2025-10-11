@@ -135,6 +135,11 @@ class MyServerCallbacks : public BLEServerCallbacks
     Serial.println("BLE MIDI Disconnected!");
     leds[0] = CRGB::Black;
     FastLED.show();
+
+    // Restart advertising after disconnection
+    delay(500);                  // give the bluetooth stack the chance to get things ready
+    pServer->startAdvertising(); // restart advertising
+    Serial.println("Restarting BLE advertising...");
   }
 };
 
@@ -187,7 +192,15 @@ void setup()
 
   // Start advertising
   BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
-  pAdvertising->addServiceUUID(SERVICE_UUID);
+
+  // Configure advertising data to include the MIDI service UUID
+  BLEAdvertisementData advertisementData;
+  advertisementData.setCompleteServices(BLEUUID(SERVICE_UUID));
+  advertisementData.setName("ESP32-S3 Piano");
+  advertisementData.setFlags(0x06);
+
+  pAdvertising->setAdvertisementData(advertisementData);
+
   pAdvertising->setScanResponse(false);
   pAdvertising->setMinPreferred(0x06); // helps some devices connect
   pAdvertising->setMaxPreferred(0x12);
