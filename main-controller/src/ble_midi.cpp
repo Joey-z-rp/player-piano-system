@@ -28,7 +28,6 @@ bool BleMidiModule::init(const char *deviceName, LedControl *ledControl)
       BLECharacteristic::PROPERTY_READ |
           BLECharacteristic::PROPERTY_NOTIFY |
           BLECharacteristic::PROPERTY_WRITE_NR);
-  pCharacteristic->addDescriptor(new BLE2902());
   pCharacteristic->setCallbacks(new MyCallbacks(this));
 
   // Start the service
