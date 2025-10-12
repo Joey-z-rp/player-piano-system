@@ -85,28 +85,31 @@ void BleMidiModule::onPitchBend(byte channel, int bend)
 
 void BleMidiModule::processMidiData(std::string data)
 {
-  parseMIDI(data);
-}
-
-void BleMidiModule::parseMIDI(std::string data)
-{
+  // Process BLE MIDI data using FortySevenEffects library
+  // BLE MIDI data format: [timestamp_high, timestamp_low, status, data1, data2, ...]
   if (data.length() < 3)
     return;
 
+  // Skip timestamp bytes and get MIDI status byte
   uint8_t status = data[2];
+
+  // Check if it's a valid MIDI status byte
+  if (status < 0x80)
+    return;
 
   uint8_t channel = status & 0x0F;
   uint8_t command = status & 0xF0;
 
   switch (command)
   {
-  case 0x80: // Note Off
+  case midi::NoteOff:
     if (data.length() >= 5)
     {
       onNoteOff(channel, data[3], data[4]);
     }
     break;
-  case 0x90: // Note On
+
+  case midi::NoteOn:
     if (data.length() >= 5)
     {
       if (data[4] == 0)
@@ -119,25 +122,29 @@ void BleMidiModule::parseMIDI(std::string data)
       }
     }
     break;
-  case 0xB0: // Control Change
+
+  case midi::ControlChange:
     if (data.length() >= 5)
     {
       onControlChange(channel, data[3], data[4]);
     }
     break;
-  case 0xC0: // Program Change
+
+  case midi::ProgramChange:
     if (data.length() >= 4)
     {
       onProgramChange(channel, data[3]);
     }
     break;
-  case 0xE0: // Pitch Bend
+
+  case midi::PitchBend:
     if (data.length() >= 5)
     {
       int bend = (data[4] << 7) | data[3];
       onPitchBend(channel, bend);
     }
     break;
+
   default:
     Serial.printf("Unknown MIDI command: 0x%02X\n", command);
     break;
@@ -176,7 +183,7 @@ void BleMidiModule::MyCallbacks::onWrite(BLECharacteristic *pCharacteristic)
   std::string rxValue = pCharacteristic->getValue();
   if (rxValue.length() > 0)
   {
-    // Parse MIDI data
-    module->parseMIDI(rxValue);
+    // Process MIDI data using FortySevenEffects library
+    module->processMidiData(rxValue);
   }
 }

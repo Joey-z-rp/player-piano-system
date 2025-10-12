@@ -5,6 +5,7 @@
 #include <BLEDevice.h>
 #include <BLEServer.h>
 #include <BLEUtils.h>
+#include <MIDI.h>
 
 // Forward declaration
 class LedControl;
@@ -63,9 +64,6 @@ private:
   private:
     BleMidiModule *module;
   };
-
-  // Parse MIDI data
-  void parseMIDI(std::string data);
 };
 
 #endif // BLE_MIDI_H
