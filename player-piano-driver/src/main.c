@@ -26,7 +26,7 @@ int main(void)
   KeyDriver_Init(&g_key_driver);
   CommandParser_Init(&g_key_driver);
 
-  // Initialize stepper motor
+  // Initialize stepper motor (includes ADC init and calibration)
   StepperMotor_Init(&g_stepper_motor);
   StepperMotor_SetSpeed(&g_stepper_motor, 1000);
 
@@ -47,18 +47,18 @@ int main(void)
       KeyDriver_Update(&g_key_driver);
       CommandParser_ProcessQueue(CommandParser_GetQueue(), &g_key_driver);
 
-      if ((current_time - demo_start_time) >= 150)
+      if ((current_time - demo_start_time) >= 500)
       {
         if (!StepperMotor_IsMoving(&g_stepper_motor))
         {
           if (demo_phase == 0)
           {
-            StepperMotor_MoveRelative(&g_stepper_motor, 100); // Move 100 steps forward
+            StepperMotor_MoveRelative(&g_stepper_motor, 150); // Move 100 steps forward
             demo_phase = 1;
           }
           else
           {
-            StepperMotor_MoveRelative(&g_stepper_motor, -100); // Move 100 steps back
+            StepperMotor_MoveRelative(&g_stepper_motor, -150); // Move 100 steps back
             demo_phase = 0;
           }
 

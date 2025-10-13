@@ -4,6 +4,9 @@
 // Global stepper motor instance
 StepperMotor_t g_stepper_motor;
 
+// ADC handle for pressure sensor
+static ADC_HandleTypeDef hadc1;
+
 // Private variables for timing
 static uint32_t step_delay_us = 1000; // Default delay
 static uint32_t last_step_time = 0;
@@ -34,6 +37,113 @@ static uint32_t calculateStepDelay(uint32_t speed_steps_per_sec)
   return 1000000 / speed_steps_per_sec; // Convert to microseconds
 }
 
+// Initialize ADC for pressure sensor
+static void StepperMotor_InitADC(void)
+{
+  // Enable ADC1 clock
+  __HAL_RCC_ADC1_CLK_ENABLE();
+
+  // Configure ADC1
+  hadc1.Instance = PRESSURE_SENSOR_ADC;
+  hadc1.Init.ScanConvMode = DISABLE;
+  hadc1.Init.ContinuousConvMode = DISABLE;
+  hadc1.Init.DiscontinuousConvMode = DISABLE;
+  hadc1.Init.ExternalTrigConv = ADC_SOFTWARE_START;
+  hadc1.Init.DataAlign = ADC_DATAALIGN_RIGHT;
+  hadc1.Init.NbrOfConversion = 1;
+
+  if (HAL_ADC_Init(&hadc1) != HAL_OK)
+  {
+    // Error handling - could set an error flag here
+  }
+
+  // Configure ADC channel
+  ADC_ChannelConfTypeDef sConfig = {0};
+  sConfig.Channel = PRESSURE_SENSOR_ADC_CHANNEL;
+  sConfig.Rank = ADC_REGULAR_RANK_1;
+  sConfig.SamplingTime = ADC_SAMPLETIME_1CYCLE_5;
+
+  if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
+  {
+    // Error handling - could set an error flag here
+  }
+}
+
+// Read pressure sensor value
+uint16_t StepperMotor_ReadPressureSensor(void)
+{
+  uint16_t adc_value = 0;
+
+  // Start ADC conversion
+  if (HAL_ADC_Start(&hadc1) == HAL_OK)
+  {
+    // Wait for conversion to complete
+    if (HAL_ADC_PollForConversion(&hadc1, 100) == HAL_OK)
+    {
+      adc_value = HAL_ADC_GetValue(&hadc1);
+    }
+    HAL_ADC_Stop(&hadc1);
+  }
+
+  return adc_value;
+}
+
+// Calibrate stepper motor position using pressure sensor
+static void StepperMotor_CalibratePosition(StepperMotor_t *motor)
+{
+  // Set motor to slow speed for calibration
+  uint32_t original_speed = motor->current_speed;
+  StepperMotor_SetSpeed(motor, 200); // Slow speed for precise calibration
+
+  // Set direction to backward (CCW)
+  StepperMotor_SetDirection(motor, STEPPER_DIR_CCW);
+
+  // Move backward in small steps until pressure sensor is pressed
+  uint32_t step_count = 0;
+  const uint32_t max_calibration_steps = 2000; // Safety limit to prevent infinite movement
+
+  while (step_count < max_calibration_steps)
+  {
+    // Read pressure sensor
+    uint16_t pressure_value = StepperMotor_ReadPressureSensor();
+
+    // Check if pressure sensor is pressed (voltage drops below threshold)
+    if (pressure_value < PRESSURE_SENSOR_PRESSED_THRESHOLD)
+    {
+      // Pressure sensor is pressed, stop and reset position to 0
+      StepperMotor_Stop(motor);
+      motor->current_position = 0;
+      motor->target_position = 0;
+      break;
+    }
+
+    // Move one step backward
+    StepperMotor_MoveRelative(motor, -1);
+
+    // Wait for step to complete
+    while (StepperMotor_IsMoving(motor))
+    {
+      StepperMotor_Update(motor);
+      HAL_Delay(1); // Small delay to prevent blocking
+    }
+
+    step_count++;
+
+    // Small delay between steps for stability
+    HAL_Delay(10);
+  }
+
+  // Restore original speed
+  StepperMotor_SetSpeed(motor, original_speed);
+
+  // If we hit the safety limit, reset position anyway
+  if (step_count >= max_calibration_steps)
+  {
+    motor->current_position = 0;
+    motor->target_position = 0;
+  }
+}
+
 // Initialize stepper motor
 void StepperMotor_Init(StepperMotor_t *motor)
 {
@@ -51,6 +161,12 @@ void StepperMotor_Init(StepperMotor_t *motor)
   // Initialize GPIO pins
   HAL_GPIO_WritePin(STEPPER_STEP_PORT, STEPPER_STEP_PIN, GPIO_PIN_RESET);
   HAL_GPIO_WritePin(STEPPER_DIR_PORT, STEPPER_DIR_PIN, GPIO_PIN_RESET);
+
+  // Initialize ADC for pressure sensor
+  StepperMotor_InitADC();
+
+  // Calibrate position using pressure sensor
+  StepperMotor_CalibratePosition(motor);
 }
 
 // Set stepper motor direction
@@ -61,7 +177,7 @@ void StepperMotor_SetDirection(StepperMotor_t *motor, StepperDirection_t directi
 }
 
 // Move to absolute position
-void StepperMotor_MoveTo(StepperMotor_t *motor, uint32_t target_position)
+void StepperMotor_MoveTo(StepperMotor_t *motor, int32_t target_position)
 {
   motor->target_position = target_position;
   motor->is_moving = 1;
@@ -87,14 +203,7 @@ void StepperMotor_MoveTo(StepperMotor_t *motor, uint32_t target_position)
 // Move relative steps
 void StepperMotor_MoveRelative(StepperMotor_t *motor, int32_t steps)
 {
-  if (steps >= 0)
-  {
-    StepperMotor_MoveTo(motor, motor->current_position + steps);
-  }
-  else
-  {
-    StepperMotor_MoveTo(motor, motor->current_position - (-steps));
-  }
+  StepperMotor_MoveTo(motor, motor->current_position + steps);
 }
 
 // Stop stepper motor
@@ -219,7 +328,7 @@ uint8_t StepperMotor_IsMoving(StepperMotor_t *motor)
 }
 
 // Get current position
-uint32_t StepperMotor_GetPosition(StepperMotor_t *motor)
+int32_t StepperMotor_GetPosition(StepperMotor_t *motor)
 {
   return motor->current_position;
 }
