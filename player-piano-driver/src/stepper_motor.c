@@ -117,8 +117,8 @@ static void StepperMotor_CalibratePosition(StepperMotor_t *motor)
       break;
     }
 
-    // Move one step backward
-    StepperMotor_MoveRelative(motor, -1);
+    // Move one step backward (direct execution for calibration)
+    StepperMotor_MoveRelativeDirect(motor, -1);
 
     // Wait for step to complete
     while (StepperMotor_IsMoving(motor))
@@ -143,8 +143,8 @@ static void StepperMotor_CalibratePosition(StepperMotor_t *motor)
     motor->target_position = 0;
   }
 
-  // Move to idle position after calibration
-  StepperMotor_MoveToIdle(motor);
+  // Move to idle position after calibration (direct execution)
+  StepperMotor_MoveToIdleDirect(motor);
 }
 
 // Initialize stepper motor
@@ -162,6 +162,9 @@ void StepperMotor_Init(StepperMotor_t *motor)
   motor->is_moving = 0;
   motor->last_action = STEPPER_ACTION_NONE;
   motor->last_action_time = HAL_GetTick();
+
+  // Initialize command queue
+  StepperMotor_QueueInit(&motor->command_queue);
 
   // Initialize GPIO pins
   HAL_GPIO_WritePin(STEPPER_STEP_PORT, STEPPER_STEP_PIN, GPIO_PIN_RESET);
@@ -181,8 +184,8 @@ void StepperMotor_SetDirection(StepperMotor_t *motor, StepperDirection_t directi
   HAL_GPIO_WritePin(STEPPER_DIR_PORT, STEPPER_DIR_PIN, direction ? GPIO_PIN_SET : GPIO_PIN_RESET);
 }
 
-// Move to absolute position
-void StepperMotor_MoveTo(StepperMotor_t *motor, int32_t target_position)
+// Move to absolute position (direct execution - called from queue)
+void StepperMotor_MoveToDirect(StepperMotor_t *motor, int32_t target_position)
 {
   motor->target_position = target_position;
   motor->is_moving = 1;
@@ -205,20 +208,32 @@ void StepperMotor_MoveTo(StepperMotor_t *motor, int32_t target_position)
   step_delay_us = calculateStepDelay(motor->current_speed);
 }
 
-// Move relative steps
-void StepperMotor_MoveRelative(StepperMotor_t *motor, int32_t steps)
+// Move to absolute position (queued version)
+void StepperMotor_MoveTo(StepperMotor_t *motor, int32_t target_position)
 {
-  StepperMotor_MoveTo(motor, motor->current_position + steps);
+  StepperMotor_QueueEnqueue(&motor->command_queue, STEPPER_CMD_MOVE_TO, target_position);
 }
 
-// Stop stepper motor
+// Move relative steps (direct execution - called from queue)
+void StepperMotor_MoveRelativeDirect(StepperMotor_t *motor, int32_t steps)
+{
+  StepperMotor_MoveToDirect(motor, motor->current_position + steps);
+}
+
+// Move relative steps (queued version)
+void StepperMotor_MoveRelative(StepperMotor_t *motor, int32_t steps)
+{
+  StepperMotor_QueueEnqueue(&motor->command_queue, STEPPER_CMD_MOVE_RELATIVE, steps);
+}
+
+// Stop stepper motor (executes immediately)
 void StepperMotor_Stop(StepperMotor_t *motor)
 {
   motor->is_moving = 0;
   motor->target_position = motor->current_position;
 }
 
-// Set stepper motor speed
+// Set stepper motor speed (executes immediately)
 void StepperMotor_SetSpeed(StepperMotor_t *motor, uint32_t speed_steps_per_sec)
 {
   if (speed_steps_per_sec > STEPPER_MAX_SPEED_STEPS_PER_SEC)
@@ -291,6 +306,9 @@ void StepperMotor_Update(StepperMotor_t *motor)
   // Check for idle timeout
   StepperMotor_CheckIdleTimeout(motor);
 
+  // Process queued commands
+  StepperMotor_ProcessQueue(motor);
+
   // Update step pulse state machine
   StepperMotor_StepPulseUpdate();
 
@@ -341,28 +359,46 @@ int32_t StepperMotor_GetPosition(StepperMotor_t *motor)
   return motor->current_position;
 }
 
-// Move to idle position
-void StepperMotor_MoveToIdle(StepperMotor_t *motor)
+// Move to idle position (direct execution - called from queue)
+void StepperMotor_MoveToIdleDirect(StepperMotor_t *motor)
 {
-  StepperMotor_MoveTo(motor, STEPPER_POSITION_IDLE);
+  StepperMotor_MoveToDirect(motor, STEPPER_POSITION_IDLE);
   motor->last_action = STEPPER_ACTION_NONE; // Idle is not considered an action
   motor->last_action_time = HAL_GetTick();
 }
 
-// Move to pedal pressed position
-void StepperMotor_MoveToPedalPressed(StepperMotor_t *motor)
+// Move to idle position (queued version)
+void StepperMotor_MoveToIdle(StepperMotor_t *motor)
 {
-  StepperMotor_MoveTo(motor, STEPPER_POSITION_PEDAL_PRESSED);
+  StepperMotor_QueueEnqueue(&motor->command_queue, STEPPER_CMD_MOVE_TO_IDLE, 0);
+}
+
+// Move to pedal pressed position (direct execution - called from queue)
+void StepperMotor_MoveToPedalPressedDirect(StepperMotor_t *motor)
+{
+  StepperMotor_MoveToDirect(motor, STEPPER_POSITION_PEDAL_PRESSED);
   motor->last_action = STEPPER_ACTION_PEDAL_PRESSED;
   motor->last_action_time = HAL_GetTick();
 }
 
-// Move to pedal released position
-void StepperMotor_MoveToPedalReleased(StepperMotor_t *motor)
+// Move to pedal pressed position (queued version)
+void StepperMotor_MoveToPedalPressed(StepperMotor_t *motor)
 {
-  StepperMotor_MoveTo(motor, STEPPER_POSITION_PEDAL_RELEASED);
+  StepperMotor_QueueEnqueue(&motor->command_queue, STEPPER_CMD_MOVE_TO_PEDAL_PRESSED, 0);
+}
+
+// Move to pedal released position (direct execution - called from queue)
+void StepperMotor_MoveToPedalReleasedDirect(StepperMotor_t *motor)
+{
+  StepperMotor_MoveToDirect(motor, STEPPER_POSITION_PEDAL_RELEASED);
   motor->last_action = STEPPER_ACTION_PEDAL_RELEASED;
   motor->last_action_time = HAL_GetTick();
+}
+
+// Move to pedal released position (queued version)
+void StepperMotor_MoveToPedalReleased(StepperMotor_t *motor)
+{
+  StepperMotor_QueueEnqueue(&motor->command_queue, STEPPER_CMD_MOVE_TO_PEDAL_RELEASED, 0);
 }
 
 // Check for idle timeout and move to idle if needed
@@ -380,5 +416,111 @@ void StepperMotor_CheckIdleTimeout(StepperMotor_t *motor)
       // Move to idle position
       StepperMotor_MoveToIdle(motor);
     }
+  }
+}
+
+// Initialize command queue
+void StepperMotor_QueueInit(StepperQueue_t *queue)
+{
+  queue->head = 0;
+  queue->tail = 0;
+  queue->count = 0;
+  queue->last_command_time = 0;
+}
+
+// Check if queue is empty
+uint8_t StepperMotor_QueueIsEmpty(StepperQueue_t *queue)
+{
+  return (queue->count == 0);
+}
+
+// Check if queue is full
+uint8_t StepperMotor_QueueIsFull(StepperQueue_t *queue)
+{
+  return (queue->count >= STEPPER_QUEUE_SIZE);
+}
+
+// Enqueue a command
+uint8_t StepperMotor_QueueEnqueue(StepperQueue_t *queue, StepperCommandType_t type, int32_t value)
+{
+  if (StepperMotor_QueueIsFull(queue))
+  {
+    return 0; // Queue is full
+  }
+
+  queue->commands[queue->tail].type = type;
+  queue->commands[queue->tail].value = value;
+
+  queue->tail = (queue->tail + 1) % STEPPER_QUEUE_SIZE;
+  queue->count++;
+
+  return 1; // Success
+}
+
+// Dequeue a command
+uint8_t StepperMotor_QueueDequeue(StepperQueue_t *queue, StepperCommand_t *command)
+{
+  if (StepperMotor_QueueIsEmpty(queue))
+  {
+    return 0; // Queue is empty
+  }
+
+  *command = queue->commands[queue->head];
+  queue->head = (queue->head + 1) % STEPPER_QUEUE_SIZE;
+  queue->count--;
+
+  return 1; // Success
+}
+
+// Process queued commands with minimum interval
+void StepperMotor_ProcessQueue(StepperMotor_t *motor)
+{
+  uint32_t current_time = HAL_GetTick();
+
+  // Check if enough time has passed since last command execution
+  if ((current_time - motor->command_queue.last_command_time) < STEPPER_MIN_COMMAND_INTERVAL_MS)
+  {
+    return; // Not enough time has passed
+  }
+
+  // Check if motor is currently moving
+  if (motor->is_moving)
+  {
+    return; // Wait for current movement to complete
+  }
+
+  // Process next command in queue
+  StepperCommand_t command;
+  if (StepperMotor_QueueDequeue(&motor->command_queue, &command))
+  {
+    // Execute the command
+    switch (command.type)
+    {
+    case STEPPER_CMD_MOVE_TO:
+      StepperMotor_MoveToDirect(motor, command.value);
+      break;
+
+    case STEPPER_CMD_MOVE_RELATIVE:
+      StepperMotor_MoveRelativeDirect(motor, command.value);
+      break;
+
+    case STEPPER_CMD_MOVE_TO_IDLE:
+      StepperMotor_MoveToIdleDirect(motor);
+      break;
+
+    case STEPPER_CMD_MOVE_TO_PEDAL_PRESSED:
+      StepperMotor_MoveToPedalPressedDirect(motor);
+      break;
+
+    case STEPPER_CMD_MOVE_TO_PEDAL_RELEASED:
+      StepperMotor_MoveToPedalReleasedDirect(motor);
+      break;
+
+    default:
+      break;
+    }
+
+    // Update last command execution time
+    motor->command_queue.last_command_time = current_time;
   }
 }

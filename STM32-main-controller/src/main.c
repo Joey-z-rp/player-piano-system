@@ -76,7 +76,21 @@ int main(void)
         if (current_time - last_event_time >= event_delay_ms)
         {
           // Process the event for player piano control
-          if (event->is_note_on)
+          if (event->is_sustain_event)
+          {
+            // Handle sustain pedal event
+            if (event->is_sustain_on)
+            {
+              // Send sustain on command: "P:P"
+              RS485_SendString("P:P\n");
+            }
+            else
+            {
+              // Send sustain off command: "R:P"
+              RS485_SendString("R:P\n");
+            }
+          }
+          else if (event->is_note_on)
           {
             // Convert MIDI note number to channel (0-11 for A to G#)
             uint8_t channel = (event->note_number - 21) % 12;
