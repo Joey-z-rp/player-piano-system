@@ -142,6 +142,9 @@ static void StepperMotor_CalibratePosition(StepperMotor_t *motor)
     motor->current_position = 0;
     motor->target_position = 0;
   }
+
+  // Move to idle position after calibration
+  StepperMotor_MoveToIdle(motor);
 }
 
 // Initialize stepper motor
@@ -157,6 +160,8 @@ void StepperMotor_Init(StepperMotor_t *motor)
   motor->current_speed = STEPPER_MIN_SPEED_STEPS_PER_SEC;
   motor->direction = STEPPER_DIR_CW;
   motor->is_moving = 0;
+  motor->last_action = STEPPER_ACTION_NONE;
+  motor->last_action_time = HAL_GetTick();
 
   // Initialize GPIO pins
   HAL_GPIO_WritePin(STEPPER_STEP_PORT, STEPPER_STEP_PIN, GPIO_PIN_RESET);
@@ -283,6 +288,9 @@ uint8_t StepperMotor_IsStepPulseComplete(void)
 // Update stepper motor (call this in main loop)
 void StepperMotor_Update(StepperMotor_t *motor)
 {
+  // Check for idle timeout
+  StepperMotor_CheckIdleTimeout(motor);
+
   // Update step pulse state machine
   StepperMotor_StepPulseUpdate();
 
@@ -331,4 +339,46 @@ uint8_t StepperMotor_IsMoving(StepperMotor_t *motor)
 int32_t StepperMotor_GetPosition(StepperMotor_t *motor)
 {
   return motor->current_position;
+}
+
+// Move to idle position
+void StepperMotor_MoveToIdle(StepperMotor_t *motor)
+{
+  StepperMotor_MoveTo(motor, STEPPER_POSITION_IDLE);
+  motor->last_action = STEPPER_ACTION_NONE; // Idle is not considered an action
+  motor->last_action_time = HAL_GetTick();
+}
+
+// Move to pedal pressed position
+void StepperMotor_MoveToPedalPressed(StepperMotor_t *motor)
+{
+  StepperMotor_MoveTo(motor, STEPPER_POSITION_PEDAL_PRESSED);
+  motor->last_action = STEPPER_ACTION_PEDAL_PRESSED;
+  motor->last_action_time = HAL_GetTick();
+}
+
+// Move to pedal released position
+void StepperMotor_MoveToPedalReleased(StepperMotor_t *motor)
+{
+  StepperMotor_MoveTo(motor, STEPPER_POSITION_PEDAL_RELEASED);
+  motor->last_action = STEPPER_ACTION_PEDAL_RELEASED;
+  motor->last_action_time = HAL_GetTick();
+}
+
+// Check for idle timeout and move to idle if needed
+void StepperMotor_CheckIdleTimeout(StepperMotor_t *motor)
+{
+  // Only check timeout if last action was pedal released
+  if (motor->last_action == STEPPER_ACTION_PEDAL_RELEASED)
+  {
+    uint32_t current_time = HAL_GetTick();
+    uint32_t time_since_last_action = current_time - motor->last_action_time;
+
+    // Check if timeout has been reached
+    if (time_since_last_action >= STEPPER_IDLE_TIMEOUT_MS)
+    {
+      // Move to idle position
+      StepperMotor_MoveToIdle(motor);
+    }
+  }
 }

@@ -11,7 +11,9 @@
 typedef enum
 {
   COMMAND_PRESS = 0,
-  COMMAND_RELEASE
+  COMMAND_RELEASE,
+  COMMAND_PEDAL_PRESS,
+  COMMAND_PEDAL_RELEASE
 } CommandType_t;
 
 // Parsed command structure

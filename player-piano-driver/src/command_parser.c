@@ -1,11 +1,15 @@
 #include "command_parser.h"
 #include "rs485.h"
+#include "stepper_motor.h"
 #include <string.h>
 #include <stdio.h>
 #include <ctype.h>
 
 // Global command queue
 static CommandQueue_t g_command_queue;
+
+// External stepper motor instance
+extern StepperMotor_t g_stepper_motor;
 
 // No note mapping needed for direct channel/duty cycle format
 
@@ -17,7 +21,9 @@ HAL_StatusTypeDef CommandParser_ParseMessage(const char *message, uint16_t lengt
   // "P:0:100:50:80:100" - channel 0, duty cycle 100, initial strike 50ms, follow-up duty 80, follow-up time 100ms
   // "P:0:100:50:80:100:30" - channel 0, duty cycle 100, initial strike 50ms, follow-up duty 80, follow-up time 100ms, hold duty 30
   // "R:0:0" - release channel 0
-  if (message == NULL || command == NULL || length < 5) // Minimum length for "P:0:0"
+  // "P:P" - press pedal
+  // "R:P" - release pedal
+  if (message == NULL || command == NULL || length < 3) // Minimum length for "P:P"
   {
     return HAL_ERROR;
   }
@@ -46,6 +52,20 @@ HAL_StatusTypeDef CommandParser_ParseMessage(const char *message, uint16_t lengt
   if (message[1] != ':')
   {
     return HAL_ERROR;
+  }
+
+  // Check for pedal commands "P:P" or "R:P"
+  if (length == 3 && message[2] == 'P')
+  {
+    if (command->type == COMMAND_PRESS)
+    {
+      command->type = COMMAND_PEDAL_PRESS;
+    }
+    else
+    {
+      command->type = COMMAND_PEDAL_RELEASE;
+    }
+    return HAL_OK;
   }
 
   // Parse channel (0-11)
@@ -147,7 +167,25 @@ HAL_StatusTypeDef CommandParser_ParseMessage(const char *message, uint16_t lengt
 
 void CommandParser_ExecuteCommand(const ParsedCommand_t *command, KeyDriverModule_t *key_driver)
 {
-  if (command == NULL || key_driver == NULL)
+  if (command == NULL)
+  {
+    return;
+  }
+
+  // Handle pedal commands using stepper motor
+  if (command->type == COMMAND_PEDAL_PRESS)
+  {
+    StepperMotor_MoveToPedalPressed(&g_stepper_motor);
+    return;
+  }
+  else if (command->type == COMMAND_PEDAL_RELEASE)
+  {
+    StepperMotor_MoveToPedalReleased(&g_stepper_motor);
+    return;
+  }
+
+  // Handle key commands
+  if (key_driver == NULL)
   {
     return;
   }
