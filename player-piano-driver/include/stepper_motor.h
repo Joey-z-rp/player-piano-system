@@ -19,13 +19,13 @@
 #define PRESSURE_SENSOR_PRESSED_THRESHOLD 3700 // ~3.0V (4095 * 3.0 / 3.3)
 
 // Speed limits
-#define STEPPER_MAX_SPEED_STEPS_PER_SEC 1500
-#define STEPPER_MIN_SPEED_STEPS_PER_SEC 100
+#define STEPPER_MAX_SPEED_STEPS_PER_SEC 2500
+#define STEPPER_MIN_SPEED_STEPS_PER_SEC 500
 
 // Position definitions
-#define STEPPER_POSITION_IDLE 20           // Idle position after calibration
-#define STEPPER_POSITION_PEDAL_PRESSED 150 // Pedal pressed position
-#define STEPPER_POSITION_PEDAL_RELEASED 75 // Pedal released position
+#define STEPPER_POSITION_IDLE 300           // Idle position after calibration
+#define STEPPER_POSITION_PEDAL_PRESSED 1300 // Pedal pressed position
+#define STEPPER_POSITION_PEDAL_RELEASED 600 // Pedal released position
 
 // Timeout definitions
 #define STEPPER_IDLE_TIMEOUT_MS 15000 // 15 seconds timeout for idle after pedal released

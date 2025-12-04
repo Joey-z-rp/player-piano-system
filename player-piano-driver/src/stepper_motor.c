@@ -91,10 +91,6 @@ uint16_t StepperMotor_ReadPressureSensor(void)
 // Calibrate stepper motor position using pressure sensor
 static void StepperMotor_CalibratePosition(StepperMotor_t *motor)
 {
-  // Set motor to slow speed for calibration
-  uint32_t original_speed = motor->current_speed;
-  StepperMotor_SetSpeed(motor, 200); // Slow speed for precise calibration
-
   // Set direction to backward (CCW)
   StepperMotor_SetDirection(motor, STEPPER_DIR_CCW);
 
@@ -128,13 +124,7 @@ static void StepperMotor_CalibratePosition(StepperMotor_t *motor)
     }
 
     step_count++;
-
-    // Small delay between steps for stability
-    HAL_Delay(10);
   }
-
-  // Restore original speed
-  StepperMotor_SetSpeed(motor, original_speed);
 
   // If we hit the safety limit, reset position anyway
   if (step_count >= max_calibration_steps)
@@ -168,7 +158,7 @@ void StepperMotor_Init(StepperMotor_t *motor)
 
   // Initialize GPIO pins
   HAL_GPIO_WritePin(STEPPER_STEP_PORT, STEPPER_STEP_PIN, GPIO_PIN_RESET);
-  HAL_GPIO_WritePin(STEPPER_DIR_PORT, STEPPER_DIR_PIN, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(STEPPER_DIR_PORT, STEPPER_DIR_PIN, GPIO_PIN_SET);
 
   // Initialize ADC for pressure sensor
   StepperMotor_InitADC();
@@ -181,7 +171,7 @@ void StepperMotor_Init(StepperMotor_t *motor)
 void StepperMotor_SetDirection(StepperMotor_t *motor, StepperDirection_t direction)
 {
   motor->direction = direction;
-  HAL_GPIO_WritePin(STEPPER_DIR_PORT, STEPPER_DIR_PIN, direction ? GPIO_PIN_SET : GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(STEPPER_DIR_PORT, STEPPER_DIR_PIN, direction ? GPIO_PIN_RESET : GPIO_PIN_SET);
 }
 
 // Move to absolute position (direct execution - called from queue)

@@ -28,7 +28,7 @@ int main(void)
 
   // Initialize stepper motor (includes ADC init and calibration)
   StepperMotor_Init(&g_stepper_motor);
-  StepperMotor_SetSpeed(&g_stepper_motor, 1000);
+  StepperMotor_SetSpeed(&g_stepper_motor, 1500);
 
   last_update_time = HAL_GetTick();
   demo_start_time = HAL_GetTick();

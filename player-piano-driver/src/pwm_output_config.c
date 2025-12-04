@@ -8,22 +8,22 @@ TIM_HandleTypeDef htim4;
 // PWM configuration for all 12 outputs at 20kHz
 static const PWM_Config_t pwm_configs[] = {
     // TIM3 channels (PA6, PA7, PB0, PB1)
-    {.htim = &htim3, .channel = PWM_PB1_CHANNEL, .frequency = 500, .resolution = 100, .duty_cycle = 0},
-    {.htim = &htim3, .channel = PWM_PB0_CHANNEL, .frequency = 500, .resolution = 100, .duty_cycle = 0},
-    {.htim = &htim3, .channel = PWM_PA7_CHANNEL, .frequency = 500, .resolution = 100, .duty_cycle = 0},
-    {.htim = &htim3, .channel = PWM_PA6_CHANNEL, .frequency = 500, .resolution = 100, .duty_cycle = 0},
+    {.htim = &htim3, .channel = PWM_PB1_CHANNEL, .frequency = 20000, .resolution = 100, .duty_cycle = 0},
+    {.htim = &htim3, .channel = PWM_PB0_CHANNEL, .frequency = 20000, .resolution = 100, .duty_cycle = 0},
+    {.htim = &htim3, .channel = PWM_PA7_CHANNEL, .frequency = 20000, .resolution = 100, .duty_cycle = 0},
+    {.htim = &htim3, .channel = PWM_PA6_CHANNEL, .frequency = 20000, .resolution = 100, .duty_cycle = 0},
 
     // TIM2 channels (PA0, PA1, PA2, PA3)
-    {.htim = &htim2, .channel = PWM_PA3_CHANNEL, .frequency = 500, .resolution = 100, .duty_cycle = 0},
-    {.htim = &htim2, .channel = PWM_PA2_CHANNEL, .frequency = 500, .resolution = 100, .duty_cycle = 0},
-    {.htim = &htim2, .channel = PWM_PA1_CHANNEL, .frequency = 500, .resolution = 100, .duty_cycle = 0},
-    {.htim = &htim2, .channel = PWM_PA0_CHANNEL, .frequency = 500, .resolution = 100, .duty_cycle = 0},
+    {.htim = &htim2, .channel = PWM_PA3_CHANNEL, .frequency = 20000, .resolution = 100, .duty_cycle = 0},
+    {.htim = &htim2, .channel = PWM_PA2_CHANNEL, .frequency = 20000, .resolution = 100, .duty_cycle = 0},
+    {.htim = &htim2, .channel = PWM_PA1_CHANNEL, .frequency = 20000, .resolution = 100, .duty_cycle = 0},
+    {.htim = &htim2, .channel = PWM_PA0_CHANNEL, .frequency = 20000, .resolution = 100, .duty_cycle = 0},
 
     // TIM4 channels (PB6, PB7, PB8, PB9)
-    {.htim = &htim4, .channel = PWM_PB9_CHANNEL, .frequency = 500, .resolution = 100, .duty_cycle = 0},
-    {.htim = &htim4, .channel = PWM_PB8_CHANNEL, .frequency = 500, .resolution = 100, .duty_cycle = 0},
-    {.htim = &htim4, .channel = PWM_PB7_CHANNEL, .frequency = 500, .resolution = 100, .duty_cycle = 0},
-    {.htim = &htim4, .channel = PWM_PB6_CHANNEL, .frequency = 500, .resolution = 100, .duty_cycle = 0}};
+    {.htim = &htim4, .channel = PWM_PB9_CHANNEL, .frequency = 20000, .resolution = 100, .duty_cycle = 0},
+    {.htim = &htim4, .channel = PWM_PB8_CHANNEL, .frequency = 20000, .resolution = 100, .duty_cycle = 0},
+    {.htim = &htim4, .channel = PWM_PB7_CHANNEL, .frequency = 20000, .resolution = 100, .duty_cycle = 0},
+    {.htim = &htim4, .channel = PWM_PB6_CHANNEL, .frequency = 20000, .resolution = 100, .duty_cycle = 0}};
 
 // Helper function to configure a timer for PWM
 static void PWM_ConfigureTimer(TIM_HandleTypeDef *htim, uint32_t frequency, uint32_t resolution)
