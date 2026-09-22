@@ -68,7 +68,7 @@ HAL_StatusTypeDef CommandParser_ParseMessage(const char *message, uint16_t lengt
     return HAL_OK;
   }
 
-  // Parse channel (0-11)
+  // Parse channel (0-14)
   int i = 2;
   int channel = 0;
   while (i < length && isdigit(message[i]))
@@ -78,7 +78,7 @@ HAL_StatusTypeDef CommandParser_ParseMessage(const char *message, uint16_t lengt
   }
 
   // Validate channel range
-  if (channel < 0 || channel > 11)
+  if (channel < 0 || channel >= NUM_KEYS)
   {
     return HAL_ERROR;
   }

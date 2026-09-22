@@ -1,11 +1,12 @@
 #include "pwm_output_config.h"
 
 // Timer handles for PWM generation
+TIM_HandleTypeDef htim1;
 TIM_HandleTypeDef htim2;
 TIM_HandleTypeDef htim3;
 TIM_HandleTypeDef htim4;
 
-// PWM configuration for all 12 outputs at 20kHz
+// PWM configuration for all 15 outputs at 20kHz
 static const PWM_Config_t pwm_configs[] = {
     // TIM3 channels (PA6, PA7, PB0, PB1)
     {.htim = &htim3, .channel = PWM_PB1_CHANNEL, .frequency = 20000, .resolution = 100, .duty_cycle = 0},
@@ -23,7 +24,14 @@ static const PWM_Config_t pwm_configs[] = {
     {.htim = &htim4, .channel = PWM_PB9_CHANNEL, .frequency = 20000, .resolution = 100, .duty_cycle = 0},
     {.htim = &htim4, .channel = PWM_PB8_CHANNEL, .frequency = 20000, .resolution = 100, .duty_cycle = 0},
     {.htim = &htim4, .channel = PWM_PB7_CHANNEL, .frequency = 20000, .resolution = 100, .duty_cycle = 0},
-    {.htim = &htim4, .channel = PWM_PB6_CHANNEL, .frequency = 20000, .resolution = 100, .duty_cycle = 0}};
+    {.htim = &htim4, .channel = PWM_PB6_CHANNEL, .frequency = 20000, .resolution = 100, .duty_cycle = 0},
+
+    // TIM1 channels (PA8, PA9, PA10)
+    {.htim = &htim1, .channel = PWM_PA10_CHANNEL, .frequency = 20000, .resolution = 100, .duty_cycle = 0},
+    {.htim = &htim1, .channel = PWM_PA9_CHANNEL, .frequency = 20000, .resolution = 100, .duty_cycle = 0},
+    {.htim = &htim1, .channel = PWM_PA8_CHANNEL, .frequency = 20000, .resolution = 100, .duty_cycle = 0}};
+
+_Static_assert((sizeof(pwm_configs) / sizeof(pwm_configs[0])) == PWM_NUM_CHANNELS, "PWM channel count mismatch");
 
 // Helper function to configure a timer for PWM
 static void PWM_ConfigureTimer(TIM_HandleTypeDef *htim, uint32_t frequency, uint32_t resolution)
@@ -42,6 +50,9 @@ static void PWM_ConfigureChannels(TIM_HandleTypeDef *htim, const PWM_Config_t *c
   sConfigOC.OCMode = TIM_OCMODE_PWM1;
   sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
   sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
+  sConfigOC.OCNPolarity = TIM_OCNPOLARITY_HIGH;
+  sConfigOC.OCIdleState = TIM_OCIDLESTATE_RESET;
+  sConfigOC.OCNIdleState = TIM_OCNIDLESTATE_RESET;
 
   for (uint8_t i = 0; i < count; i++)
   {
@@ -58,6 +69,7 @@ static void PWM_ConfigureChannels(TIM_HandleTypeDef *htim, const PWM_Config_t *c
 void PWM_Init(void)
 {
   // Enable timer clocks
+  __HAL_RCC_TIM1_CLK_ENABLE();
   __HAL_RCC_TIM2_CLK_ENABLE();
   __HAL_RCC_TIM3_CLK_ENABLE();
   __HAL_RCC_TIM4_CLK_ENABLE();
@@ -69,8 +81,9 @@ void PWM_Init(void)
   // Configure GPIO pins for PWM output
   GPIO_InitTypeDef GPIO_InitStruct = {0};
 
-  // Configure PA0, PA1, PA2, PA3, PA6, PA7 for PWM output
-  GPIO_InitStruct.Pin = GPIO_PIN_0 | GPIO_PIN_1 | GPIO_PIN_2 | GPIO_PIN_3 | GPIO_PIN_6 | GPIO_PIN_7;
+  // Configure PA0, PA1, PA2, PA3, PA6, PA7, PA8, PA9, PA10 for PWM output
+  GPIO_InitStruct.Pin = GPIO_PIN_0 | GPIO_PIN_1 | GPIO_PIN_2 | GPIO_PIN_3 | GPIO_PIN_6 | GPIO_PIN_7 |
+                        GPIO_PIN_8 | GPIO_PIN_9 | GPIO_PIN_10;
   GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
@@ -107,12 +120,21 @@ void PWM_Init(void)
     // Error handling
   }
   PWM_ConfigureChannels(&htim4, pwm_configs, 8, 4);
+
+  // Configure TIM1
+  htim1.Instance = TIM1;
+  PWM_ConfigureTimer(&htim1, pwm_configs[12].frequency, pwm_configs[12].resolution);
+  if (HAL_TIM_PWM_Init(&htim1) != HAL_OK)
+  {
+    // Error handling
+  }
+  PWM_ConfigureChannels(&htim1, pwm_configs, 12, 3);
 }
 
 void PWM_SetDutyCycle(uint8_t channel_index, uint32_t duty_cycle)
 {
   // Validate channel index
-  if (channel_index >= 12)
+  if (channel_index >= PWM_NUM_CHANNELS)
     return;
 
   if (duty_cycle > 100)
@@ -143,6 +165,11 @@ void PWM_Start(void)
   HAL_TIM_PWM_Start(&htim4, PWM_PB7_CHANNEL);
   HAL_TIM_PWM_Start(&htim4, PWM_PB8_CHANNEL);
   HAL_TIM_PWM_Start(&htim4, PWM_PB9_CHANNEL);
+
+  // Start TIM1 channels (PA8, PA9, PA10)
+  HAL_TIM_PWM_Start(&htim1, PWM_PA8_CHANNEL);
+  HAL_TIM_PWM_Start(&htim1, PWM_PA9_CHANNEL);
+  HAL_TIM_PWM_Start(&htim1, PWM_PA10_CHANNEL);
 }
 
 void PWM_Stop(void)
@@ -164,4 +191,9 @@ void PWM_Stop(void)
   HAL_TIM_PWM_Stop(&htim4, PWM_PB7_CHANNEL);
   HAL_TIM_PWM_Stop(&htim4, PWM_PB8_CHANNEL);
   HAL_TIM_PWM_Stop(&htim4, PWM_PB9_CHANNEL);
+
+  // Stop TIM1 channels (PA8, PA9, PA10)
+  HAL_TIM_PWM_Stop(&htim1, PWM_PA8_CHANNEL);
+  HAL_TIM_PWM_Stop(&htim1, PWM_PA9_CHANNEL);
+  HAL_TIM_PWM_Stop(&htim1, PWM_PA10_CHANNEL);
 }

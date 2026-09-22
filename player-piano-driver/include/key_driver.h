@@ -5,7 +5,7 @@
 #include "pwm_output_config.h"
 
 // Key driver configuration
-#define NUM_KEYS 12
+#define NUM_KEYS PWM_NUM_CHANNELS
 #define INITIAL_STRIKE_TIME_MS 50
 #define HOLD_DUTY_CYCLE 20
 #define MAX_VELOCITY 127
