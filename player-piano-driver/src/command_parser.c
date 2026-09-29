@@ -1,4 +1,5 @@
 #include "command_parser.h"
+#include "board_config.h"
 #include "rs485.h"
 #include "stepper_motor.h"
 #include <string.h>
@@ -16,11 +17,11 @@ extern StepperMotor_t g_stepper_motor;
 HAL_StatusTypeDef CommandParser_ParseMessage(const char *message, uint16_t length, ParsedCommand_t *command)
 {
   // Expected formats:
-  // "P:0:100" - channel 0, duty cycle 100, default timing
-  // "P:0:100:50" - channel 0, duty cycle 100, initial strike time 50ms
-  // "P:0:100:50:80:100" - channel 0, duty cycle 100, initial strike 50ms, follow-up duty 80, follow-up time 100ms
-  // "P:0:100:50:80:100:30" - channel 0, duty cycle 100, initial strike 50ms, follow-up duty 80, follow-up time 100ms, hold duty 30
-  // "R:0:0" - release channel 0
+  // "P:0:100" - piano key 0, duty cycle 100, default timing
+  // "P:0:100:50" - piano key 0, duty cycle 100, initial strike time 50ms
+  // "P:0:100:50:80:100" - piano key 0, duty cycle 100, initial strike 50ms, follow-up duty 80, follow-up time 100ms
+  // "P:0:100:50:80:100:30" - piano key 0, duty cycle 100, initial strike 50ms, follow-up duty 80, follow-up time 100ms, hold duty 30
+  // "R:0:0" - release piano key 0
   // "P:P" - press pedal
   // "R:P" - release pedal
   if (message == NULL || command == NULL || length < 3) // Minimum length for "P:P"
@@ -68,7 +69,7 @@ HAL_StatusTypeDef CommandParser_ParseMessage(const char *message, uint16_t lengt
     return HAL_OK;
   }
 
-  // Parse channel (0-14)
+  // Parse piano key (0-87)
   int i = 2;
   int channel = 0;
   while (i < length && isdigit(message[i]))
@@ -77,8 +78,8 @@ HAL_StatusTypeDef CommandParser_ParseMessage(const char *message, uint16_t lengt
     i++;
   }
 
-  // Validate channel range
-  if (channel < 0 || channel >= NUM_KEYS)
+  // Validate piano key range
+  if (channel < 0 || channel >= PIANO_NUM_KEYS)
   {
     return HAL_ERROR;
   }
@@ -216,10 +217,21 @@ static void CommandParser_RS485Callback(const char *message, uint16_t length)
     return;
   }
 
-  // Format: "P:11:100" or "R:11:0"
+  // Format: "P:42:100" or "R:42:0" where the number is a piano key (0-87)
   ParsedCommand_t parsed_command;
   if (CommandParser_ParseMessage(message, length, &parsed_command) == HAL_OK)
   {
+    if (parsed_command.type == COMMAND_PRESS || parsed_command.type == COMMAND_RELEASE)
+    {
+      if (parsed_command.channel < KEY_BASE ||
+          parsed_command.channel >= (KEY_BASE + LOCAL_CHANNELS))
+      {
+        return;
+      }
+
+      parsed_command.channel = (uint8_t)(parsed_command.channel - KEY_BASE);
+    }
+
     // Queue the parsed command for processing in main loop
     CommandQueue_Enqueue(&g_command_queue, &parsed_command);
   }
