@@ -48,10 +48,10 @@ void KeyDriver_PressKey(KeyDriverModule_t *key_driver, uint8_t key, uint8_t duty
     followup_duty_cycle = 100;
   }
 
-  // Clamp hold duty cycle to valid range (0-100)
+  // 0-100 is explicit (including 0%). Values above 100 mean "field omitted".
   if (hold_duty_cycle > 100)
   {
-    hold_duty_cycle = 100;
+    hold_duty_cycle = HOLD_DUTY_CYCLE;
   }
 
   // Set key state to initial strike
@@ -60,7 +60,7 @@ void KeyDriver_PressKey(KeyDriverModule_t *key_driver, uint8_t key, uint8_t duty
   key_driver->keys[key].followup_start_time = 0;
   key_driver->keys[key].initial_duty_cycle = duty_cycle;
   key_driver->keys[key].followup_duty_cycle = followup_duty_cycle;
-  key_driver->keys[key].hold_duty_cycle = (hold_duty_cycle > 0) ? hold_duty_cycle : HOLD_DUTY_CYCLE;
+  key_driver->keys[key].hold_duty_cycle = hold_duty_cycle;
 
   // Set timing parameters (use defaults if 0)
   key_driver->keys[key].initial_strike_time_ms = (initial_strike_time > 0) ? initial_strike_time : INITIAL_STRIKE_TIME_MS;

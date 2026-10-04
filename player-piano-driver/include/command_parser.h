@@ -11,9 +11,7 @@
 typedef enum
 {
   COMMAND_PRESS = 0,
-  COMMAND_RELEASE,
-  COMMAND_PEDAL_PRESS,
-  COMMAND_PEDAL_RELEASE
+  COMMAND_RELEASE
 } CommandType_t;
 
 // Parsed command structure
@@ -25,7 +23,7 @@ typedef struct
   uint16_t initial_strike_time; // Initial strike time in ms (0 = use default)
   uint8_t followup_duty_cycle;  // Follow-up duty cycle (0-100, 0 = no follow-up)
   uint16_t followup_time;       // Follow-up time in ms (0 = no follow-up)
-  uint8_t hold_duty_cycle;      // Hold duty cycle (0-100, 0 = use default)
+  uint8_t hold_duty_cycle;      // Hold duty (0-100, 255 = omitted / use default)
 } ParsedCommand_t;
 
 // Command queue structure

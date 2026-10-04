@@ -1,18 +1,12 @@
 #include "command_parser.h"
 #include "board_config.h"
 #include "rs485.h"
-#include "stepper_motor.h"
 #include <string.h>
 #include <stdio.h>
 #include <ctype.h>
 
 // Global command queue
 static CommandQueue_t g_command_queue;
-
-// External stepper motor instance
-extern StepperMotor_t g_stepper_motor;
-
-// No note mapping needed for direct channel/duty cycle format
 
 HAL_StatusTypeDef CommandParser_ParseMessage(const char *message, uint16_t length, ParsedCommand_t *command)
 {
@@ -22,9 +16,8 @@ HAL_StatusTypeDef CommandParser_ParseMessage(const char *message, uint16_t lengt
   // "P:0:100:50:80:100" - piano key 0, duty cycle 100, initial strike 50ms, follow-up duty 80, follow-up time 100ms
   // "P:0:100:50:80:100:30" - piano key 0, duty cycle 100, initial strike 50ms, follow-up duty 80, follow-up time 100ms, hold duty 30
   // "R:0:0" - release piano key 0
-  // "P:P" - press pedal
-  // "R:P" - release pedal
-  if (message == NULL || command == NULL || length < 3) // Minimum length for "P:P"
+  // "P:88:70:..." / "P:89:..." - board 0 pedal PWM 13/14
+  if (message == NULL || command == NULL || length < 3)
   {
     return HAL_ERROR;
   }
@@ -33,7 +26,7 @@ HAL_StatusTypeDef CommandParser_ParseMessage(const char *message, uint16_t lengt
   command->initial_strike_time = 0; // 0 means use default
   command->followup_duty_cycle = 0; // 0 means no follow-up
   command->followup_time = 0;       // 0 means no follow-up
-  command->hold_duty_cycle = 0;     // 0 means use default
+  command->hold_duty_cycle = 255; // 255 means omitted (use default hold)
 
   // Parse command type (P or R)
   if (message[0] == 'P')
@@ -55,21 +48,7 @@ HAL_StatusTypeDef CommandParser_ParseMessage(const char *message, uint16_t lengt
     return HAL_ERROR;
   }
 
-  // Check for pedal commands "P:P" or "R:P"
-  if (length == 3 && message[2] == 'P')
-  {
-    if (command->type == COMMAND_PRESS)
-    {
-      command->type = COMMAND_PEDAL_PRESS;
-    }
-    else
-    {
-      command->type = COMMAND_PEDAL_RELEASE;
-    }
-    return HAL_OK;
-  }
-
-  // Parse piano key (0-87)
+  // Parse piano key (0-87) or pedal keys 88/89
   int i = 2;
   int channel = 0;
   while (i < length && isdigit(message[i]))
@@ -78,8 +57,9 @@ HAL_StatusTypeDef CommandParser_ParseMessage(const char *message, uint16_t lengt
     i++;
   }
 
-  // Validate piano key range
-  if (channel < 0 || channel >= PIANO_NUM_KEYS)
+  // Piano keys 0-87, or pedal keys 88/89 on board 0
+  if (channel < 0 ||
+      (channel >= PIANO_NUM_KEYS && channel != PEDAL_KEY_A && channel != PEDAL_KEY_B))
   {
     return HAL_ERROR;
   }
@@ -109,7 +89,6 @@ HAL_StatusTypeDef CommandParser_ParseMessage(const char *message, uint16_t lengt
 
   command->duty_cycle = duty_cycle;
 
-  // For release commands, we're done
   if (command->type == COMMAND_RELEASE)
   {
     return HAL_OK;
@@ -141,7 +120,7 @@ HAL_StatusTypeDef CommandParser_ParseMessage(const char *message, uint16_t lengt
     {
       command->followup_time = param_value;
     }
-    else if (command->hold_duty_cycle == 0) // Fourth optional parameter
+    else if (command->hold_duty_cycle > 100) // Fourth optional parameter (255 = not set)
     {
       command->hold_duty_cycle = param_value;
     }
@@ -157,8 +136,8 @@ HAL_StatusTypeDef CommandParser_ParseMessage(const char *message, uint16_t lengt
     return HAL_ERROR;
   }
 
-  // Validate hold duty cycle if specified
-  if (command->hold_duty_cycle < 0 || command->hold_duty_cycle > 100)
+  // Validate hold duty cycle if specified (255 = omitted)
+  if (command->hold_duty_cycle != 255 && command->hold_duty_cycle > 100)
   {
     return HAL_ERROR;
   }
@@ -168,25 +147,7 @@ HAL_StatusTypeDef CommandParser_ParseMessage(const char *message, uint16_t lengt
 
 void CommandParser_ExecuteCommand(const ParsedCommand_t *command, KeyDriverModule_t *key_driver)
 {
-  if (command == NULL)
-  {
-    return;
-  }
-
-  // Handle pedal commands using stepper motor
-  if (command->type == COMMAND_PEDAL_PRESS)
-  {
-    StepperMotor_MoveToPedalPressed(&g_stepper_motor);
-    return;
-  }
-  else if (command->type == COMMAND_PEDAL_RELEASE)
-  {
-    StepperMotor_MoveToPedalReleased(&g_stepper_motor);
-    return;
-  }
-
-  // Handle key commands
-  if (key_driver == NULL)
+  if (command == NULL || key_driver == NULL)
   {
     return;
   }
@@ -223,13 +184,23 @@ static void CommandParser_RS485Callback(const char *message, uint16_t length)
   {
     if (parsed_command.type == COMMAND_PRESS || parsed_command.type == COMMAND_RELEASE)
     {
-      if (parsed_command.channel < KEY_BASE ||
-          parsed_command.channel >= (KEY_BASE + LOCAL_CHANNELS))
+      if (parsed_command.channel == PEDAL_KEY_A || parsed_command.channel == PEDAL_KEY_B)
+      {
+        if (PEDAL_LOCAL_CHANNELS == 0)
+        {
+          return;
+        }
+        parsed_command.channel = (uint8_t)(LOCAL_CHANNELS + (parsed_command.channel - PEDAL_KEY_A));
+      }
+      else if (parsed_command.channel < KEY_BASE ||
+               parsed_command.channel >= (KEY_BASE + LOCAL_CHANNELS))
       {
         return;
       }
-
-      parsed_command.channel = (uint8_t)(parsed_command.channel - KEY_BASE);
+      else
+      {
+        parsed_command.channel = (uint8_t)(parsed_command.channel - KEY_BASE);
+      }
     }
 
     // Queue the parsed command for processing in main loop

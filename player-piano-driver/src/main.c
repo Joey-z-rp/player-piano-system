@@ -4,16 +4,8 @@
 #include "key_driver.h"
 #include "rs485.h"
 #include "command_parser.h"
-#include "stepper_motor.h"
 
 static uint32_t last_update_time = 0;
-
-// Stepper motor demo variables
-static uint32_t demo_start_time = 0;
-static uint8_t demo_phase = 0;
-
-// Global stepper motor instance
-extern StepperMotor_t g_stepper_motor;
 
 int main(void)
 {
@@ -26,22 +18,12 @@ int main(void)
   KeyDriver_Init(&g_key_driver);
   CommandParser_Init(&g_key_driver);
 
-  // Initialize stepper motor (includes ADC init and calibration)
-  StepperMotor_Init(&g_stepper_motor);
-  StepperMotor_SetSpeed(&g_stepper_motor, 1500);
-
   last_update_time = HAL_GetTick();
-  demo_start_time = HAL_GetTick();
 
-  // Main loop - non-blocking
   while (1)
   {
     uint32_t current_time = HAL_GetTick();
 
-    // Always update stepper motor for accurate timing
-    StepperMotor_Update(&g_stepper_motor);
-
-    // Update other systems at 1ms intervals
     if ((current_time - last_update_time) >= 1)
     {
       KeyDriver_Update(&g_key_driver);

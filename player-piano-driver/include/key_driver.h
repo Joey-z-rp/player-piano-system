@@ -7,8 +7,8 @@
 
 // Key driver configuration. PWM hardware stays at 15 outputs;
 // this board only drives the keys in its range.
-#define NUM_KEYS LOCAL_CHANNELS
-_Static_assert(LOCAL_CHANNELS <= PWM_NUM_CHANNELS, "local channels exceed PWM outputs");
+#define NUM_KEYS (LOCAL_CHANNELS + PEDAL_LOCAL_CHANNELS)
+_Static_assert(NUM_KEYS <= PWM_NUM_CHANNELS, "local channels exceed PWM outputs");
 #define INITIAL_STRIKE_TIME_MS 50
 #define HOLD_DUTY_CYCLE 20
 #define MAX_VELOCITY 127
