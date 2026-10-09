@@ -1,9 +1,13 @@
 #include <Arduino.h>
+#include "app/piano_controller.h"
 #include "led_control.h"
+#include "rs485.h"
 #include "wifi_station.h"
-#include "web_server.h"
+#include "web/web_server.h"
 
 LedControl ledControl;
+Rs485Module rs485;
+PianoController piano;
 WiFiStationModule wifiStation;
 WebServerModule webServer;
 
@@ -25,6 +29,19 @@ void setup()
   }
   ledControl.set(CRGB::Black);
 
+  Serial.println("Initializing RS485...");
+  if (!rs485.init())
+  {
+    Serial.println("Failed to initialize RS485");
+    return;
+  }
+
+  if (!piano.init(&rs485))
+  {
+    Serial.println("Failed to initialize piano controller");
+    return;
+  }
+
   Serial.println("Initializing WiFi Station...");
   if (!wifiStation.init())
   {
@@ -32,15 +49,16 @@ void setup()
     return;
   }
 
+  if (!webServer.begin(piano))
+  {
+    Serial.println("Failed to start web server");
+    return;
+  }
   ledControl.set(CRGB::Green);
-  webServer.begin();
   Serial.printf("Open http://%s/\n", wifiStation.getIPAddress().toString().c_str());
 }
 
 void loop()
 {
-  if (wifiStation.isConnected())
-  {
-    webServer.handle();
-  }
+  piano.process();
 }

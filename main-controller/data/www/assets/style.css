@@ -1,0 +1,5 @@
+body { font-family: sans-serif; margin: 24px; max-width: 40em; }
+form { display: flex; gap: 8px; }
+input { font: 16px monospace; flex: 1; }
+button { font-size: 16px; }
+pre { font-family: monospace; white-space: pre-wrap; }
