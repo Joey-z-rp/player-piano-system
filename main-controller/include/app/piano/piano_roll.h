@@ -1,7 +1,8 @@
 #ifndef PIANO_ROLL_H
 #define PIANO_ROLL_H
 
-#include <Arduino.h>
+#include <stdint.h>
+#include <string>
 #include <vector>
 
 static const uint8_t PIANO_KEY_COUNT = 88;
@@ -24,7 +25,7 @@ struct RollEvent
 
 struct PianoRoll
 {
-  String title;
+  std::string title;
   std::vector<RollEvent> events; // sorted by timeMs
   uint32_t durationMs = 0;
   uint32_t noteCount = 0;

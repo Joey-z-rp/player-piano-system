@@ -30,7 +30,7 @@ struct RawEvent
   uint8_t note;
 };
 
-bool parseTrack(ByteReader track, std::vector<RawEvent> &raw, String &error)
+bool parseTrack(ByteReader track, std::vector<RawEvent> &raw, std::string &error)
 {
   uint32_t tick = 0;
   uint8_t runningStatus = 0;
@@ -143,7 +143,7 @@ bool parseTrack(ByteReader track, std::vector<RawEvent> &raw, String &error)
   return true;
 }
 
-bool readTracks(ByteReader file, uint16_t &division, std::vector<RawEvent> &raw, String &error)
+bool readTracks(ByteReader file, uint16_t &division, std::vector<RawEvent> &raw, std::string &error)
 {
   uint32_t chunkId, chunkLength;
   uint16_t format, trackCount;
@@ -193,7 +193,7 @@ bool readTracks(ByteReader file, uint16_t &division, std::vector<RawEvent> &raw,
     }
     if (!parseTrack(chunk, raw, error))
     {
-      error = String("track ") + tracksRead + ": " + error;
+      error = "track " + std::to_string(tracksRead) + ": " + error;
       return false;
     }
     tracksRead++;
@@ -299,10 +299,10 @@ void toTimeline(uint16_t division, std::vector<RawEvent> &raw, std::vector<MidiE
 }
 } // namespace
 
-bool parseMidiFile(const uint8_t *data, size_t length, std::vector<MidiEvent> &events, String &error)
+bool parseMidiFile(const uint8_t *data, size_t length, std::vector<MidiEvent> &events, std::string &error)
 {
   events.clear();
-  if (data == nullptr)
+  if (data == nullptr && length > 0)
   {
     error = "no data";
     return false;

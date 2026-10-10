@@ -53,7 +53,7 @@ static void handleMidiUpload(AsyncWebServerRequest *request, PianoController &pi
   }
 
   std::vector<MidiEvent> events;
-  String error;
+  std::string error;
   if (!parseMidiFile(static_cast<const uint8_t *>(request->_tempObject), length, events, error))
   {
     sendError(request, 400, error.c_str());
@@ -70,7 +70,7 @@ static void handleMidiUpload(AsyncWebServerRequest *request, PianoController &pi
     sendError(request, 400, "no playable notes");
     return;
   }
-  roll->title = request->hasParam("name") ? request->getParam("name")->value() : String("untitled");
+  roll->title = request->hasParam("name") ? request->getParam("name")->value().c_str() : "untitled";
 
   PlaybackResult result = piano.loadRoll(roll);
   if (result != PlaybackResult::Ok)
