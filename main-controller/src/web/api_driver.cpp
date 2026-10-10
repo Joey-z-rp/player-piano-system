@@ -1,6 +1,6 @@
 #include "web/api_driver.h"
 #include "web/api_response.h"
-#include "app/piano_controller.h"
+#include "app/piano/piano_controller.h"
 #include <AsyncJson.h>
 
 void registerDriverRoutes(AsyncWebServer &server, PianoController &piano)

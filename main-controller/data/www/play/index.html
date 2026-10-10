@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Play</title>
+<link rel="stylesheet" href="/assets/style.css">
+</head>
+<body>
+<h1>Play</h1>
+<p><input id="file" type="file" accept=".mid,.midi,audio/midi"></p>
+<p id="piece">No piece loaded</p>
+<p>
+  <button id="play" disabled>Play</button>
+  <button id="stop" disabled>Stop</button>
+</p>
+<p><progress id="progress" value="0" max="1"></progress> <span id="time"></span></p>
+<p id="message"></p>
+<script src="/play/app.js"></script>
+</body>
+</html>

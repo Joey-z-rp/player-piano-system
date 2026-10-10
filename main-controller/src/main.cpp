@@ -1,5 +1,5 @@
 #include <Arduino.h>
-#include "app/piano_controller.h"
+#include "app/piano/piano_controller.h"
 #include "led_control.h"
 #include "rs485.h"
 #include "wifi_station.h"
@@ -58,7 +58,8 @@ void setup()
   Serial.printf("Open http://%s/\n", wifiStation.getIPAddress().toString().c_str());
 }
 
+// Playback and RS485 run on the piano controller's own task.
 void loop()
 {
-  piano.process();
+  delay(1000);
 }

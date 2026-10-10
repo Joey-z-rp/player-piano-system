@@ -1,5 +1,6 @@
 #include "web/web_server.h"
 #include "web/api_driver.h"
+#include "web/api_playback.h"
 #include "web/api_response.h"
 #include "web/api_status.h"
 #include <LittleFS.h>
@@ -17,6 +18,7 @@ bool WebServerModule::begin(PianoController &piano)
   }
 
   registerDriverRoutes(server, piano);
+  registerPlaybackRoutes(server, piano);
   registerStatusRoutes(server, piano);
 
   // Each page is a folder under data/www/ with its own index.html,
