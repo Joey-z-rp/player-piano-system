@@ -40,6 +40,8 @@ bool WiFiStationModule::init(const char *ssid, const char *password)
   WiFi.mode(WIFI_STA);
   delay(100);
 
+  WiFi.setSleep(false);
+
   // Begin WiFi connection
   WiFi.begin(wifiSSID.c_str(), wifiPassword.c_str());
 

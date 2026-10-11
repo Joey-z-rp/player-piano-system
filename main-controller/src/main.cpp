@@ -2,12 +2,14 @@
 #include "app/piano/piano_controller.h"
 #include "led_control.h"
 #include "rs485.h"
+#include "serial_commands.h"
 #include "wifi_station.h"
 #include "web/web_server.h"
 
 LedControl ledControl;
 Rs485Module rs485;
 PianoController piano;
+SerialCommands serialCommands;
 WiFiStationModule wifiStation;
 WebServerModule webServer;
 
@@ -41,6 +43,7 @@ void setup()
     Serial.println("Failed to initialize piano controller");
     return;
   }
+  serialCommands.begin(&piano);
 
   Serial.println("Initializing WiFi Station...");
   if (!wifiStation.init())
@@ -58,8 +61,10 @@ void setup()
   Serial.printf("Open http://%s/\n", wifiStation.getIPAddress().toString().c_str());
 }
 
-// Playback and RS485 run on the piano controller's own task.
+// Playback and RS485 run on the piano controller's own task; the loop only
+// reads commands from the USB serial port.
 void loop()
 {
-  delay(1000);
+  serialCommands.poll();
+  delay(1);
 }
