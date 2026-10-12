@@ -1,0 +1,28 @@
+body { max-width: 72em; }
+section { margin-bottom: 20px; }
+h2 { font-size: 18px; margin: 0 0 8px; }
+.hint { margin: 0 0 8px; color: #555; font-size: 14px; }
+.row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin: 8px 0; }
+.row label { display: flex; align-items: center; gap: 6px; }
+.row input { flex: none; }
+input.short { width: 5em; }
+input[type=range] { width: 12em; }
+select { font-size: 16px; }
+
+.keyboard-scroll { overflow-x: auto; padding-bottom: 4px; }
+.keyboard { position: relative; display: flex; height: 120px; width: max-content; user-select: none; }
+.white, .black { box-sizing: border-box; border: 1px solid #444; cursor: pointer; padding: 0; font: 10px sans-serif; }
+.white { flex: none; width: 22px; height: 100%; background: #fff; border-radius: 0 0 3px 3px;
+  display: flex; align-items: flex-end; justify-content: center; padding-bottom: 4px; color: #777; }
+.black { position: absolute; z-index: 1; top: 0; width: 14px; height: 62%; background: #222;
+  border-radius: 0 0 2px 2px; }
+.white:hover { background: #eef3fb; }
+.black:hover { background: #3a4a66; }
+.white.selected { background: #cfe0fa; }
+.black.selected { background: #3c6fc4; }
+.white.playing, .black.playing { background: #f2b33d; }
+.white:focus-visible, .black:focus-visible { outline: 2px solid #3c6fc4; outline-offset: -2px; }
+
+.history { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.history button { font: 13px monospace; }
+#log { max-height: 16em; overflow-y: auto; background: #f6f6f6; padding: 8px; }

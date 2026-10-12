@@ -8,27 +8,96 @@
 // Global command queue
 static CommandQueue_t g_command_queue;
 
+// Reads a duty cycle in percent with up to two decimals ("32", "32.5",
+// "32.25") as hundredths of a percent, 0-PWM_DUTY_FULL.
+static int ParseDuty(const char *message, uint16_t length, uint16_t *i, uint16_t *duty)
+{
+  uint32_t value = 0;
+  uint8_t digits = 0;
+  while (*i < length && isdigit((unsigned char)message[*i]))
+  {
+    value = value * 10 + (uint32_t)(message[*i] - '0');
+    (*i)++;
+    if (++digits > 3)
+    {
+      return 0;
+    }
+  }
+  if (digits == 0)
+  {
+    return 0;
+  }
+  value *= 100;
+  if (*i < length && message[*i] == '.')
+  {
+    (*i)++;
+    uint32_t scale = 10;
+    uint8_t decimals = 0;
+    while (*i < length && isdigit((unsigned char)message[*i]))
+    {
+      if (++decimals > 2)
+      {
+        return 0;
+      }
+      value += (uint32_t)(message[*i] - '0') * scale;
+      scale /= 10;
+      (*i)++;
+    }
+    if (decimals == 0)
+    {
+      return 0;
+    }
+  }
+  if (value > PWM_DUTY_FULL)
+  {
+    return 0;
+  }
+  *duty = (uint16_t)value;
+  return 1;
+}
+
+// Reads a whole number up to 65535 (a key or a time in ms).
+static int ParseNumber(const char *message, uint16_t length, uint16_t *i, uint16_t *number)
+{
+  uint32_t value = 0;
+  uint8_t digits = 0;
+  while (*i < length && isdigit((unsigned char)message[*i]))
+  {
+    value = value * 10 + (uint32_t)(message[*i] - '0');
+    (*i)++;
+    if (++digits > 5 || value > 65535)
+    {
+      return 0;
+    }
+  }
+  if (digits == 0)
+  {
+    return 0;
+  }
+  *number = (uint16_t)value;
+  return 1;
+}
+
 HAL_StatusTypeDef CommandParser_ParseMessage(const char *message, uint16_t length, ParsedCommand_t *command)
 {
-  // Expected formats:
-  // "P:0:100" - piano key 0, duty cycle 100, default timing
-  // "P:0:100:50" - piano key 0, duty cycle 100, initial strike time 50ms
-  // "P:0:100:50:80:100" - piano key 0, duty cycle 100, initial strike 50ms, follow-up duty 80, follow-up time 100ms
-  // "P:0:100:50:80:100:30" - piano key 0, duty cycle 100, initial strike 50ms, follow-up duty 80, follow-up time 100ms, hold duty 30
-  // "R:0:0" - release piano key 0
-  // "P:88:70:..." / "P:89:..." - board 0 pedal PWM 13/14
-  if (message == NULL || command == NULL || length < 3)
+  // Formats (duty cycles in percent, with up to two decimals; times in ms):
+  //   P:<key>:<duty>[:<strike time>[:<follow-up duty>:<follow-up time>[:<hold duty>]]]
+  //   R:<key>[:<anything>]
+  // e.g. "P:40:32.25", "P:88:100:30:100:30:55", "R:40:0".
+  // Optional fields go by position: a strike time of 0 uses the default, a
+  // follow-up duty or time of 0 skips the follow-up, and a hold of 0 is 0%.
+  // Keys 0-87 are piano keys; 88 and 89 are board 0's pedal outputs.
+  if (message == NULL || command == NULL || length < 3 || message[1] != ':')
   {
     return HAL_ERROR;
   }
 
-  // Initialize command with defaults
-  command->initial_strike_time = 0; // 0 means use default
-  command->followup_duty_cycle = 0; // 0 means no follow-up
-  command->followup_time = 0;       // 0 means no follow-up
-  command->hold_duty_cycle = 255; // 255 means omitted (use default hold)
+  command->initial_strike_time = 0;
+  command->followup_duty_cycle = 0;
+  command->followup_time = 0;
+  command->hold_duty_cycle = DUTY_OMITTED;
+  command->duty_cycle = 0;
 
-  // Parse command type (P or R)
   if (message[0] == 'P')
   {
     command->type = COMMAND_PRESS;
@@ -39,110 +108,66 @@ HAL_StatusTypeDef CommandParser_ParseMessage(const char *message, uint16_t lengt
   }
   else
   {
-    return HAL_ERROR; // Invalid command type
-  }
-
-  // Check for colon separator
-  if (message[1] != ':')
-  {
     return HAL_ERROR;
   }
 
-  // Parse piano key (0-87) or pedal keys 88/89
-  int i = 2;
-  int channel = 0;
-  while (i < length && isdigit(message[i]))
-  {
-    channel = channel * 10 + (message[i] - '0');
-    i++;
-  }
-
-  // Piano keys 0-87, or pedal keys 88/89 on board 0
-  if (channel < 0 ||
+  uint16_t i = 2;
+  uint16_t channel;
+  if (!ParseNumber(message, length, &i, &channel) ||
       (channel >= PIANO_NUM_KEYS && channel != PEDAL_KEY_A && channel != PEDAL_KEY_B))
   {
     return HAL_ERROR;
   }
+  command->channel = (uint8_t)channel;
 
-  command->channel = channel;
+  if (command->type == COMMAND_RELEASE)
+  {
+    return HAL_OK; // anything after the key is ignored
+  }
 
-  // Check for second colon separator
   if (i >= length || message[i] != ':')
   {
     return HAL_ERROR;
   }
-
-  // Parse initial duty cycle
-  i++; // Skip the colon
-  int duty_cycle = 0;
-  while (i < length && isdigit(message[i]))
+  i++;
+  if (!ParseDuty(message, length, &i, &command->duty_cycle))
   {
-    duty_cycle = duty_cycle * 10 + (message[i] - '0');
+    return HAL_ERROR;
+  }
+
+  for (uint8_t field = 0; i < length && message[i] == ':'; field++)
+  {
+    i++;
+    int ok;
+    switch (field)
+    {
+    case 0:
+      ok = ParseNumber(message, length, &i, &command->initial_strike_time);
+      break;
+    case 1:
+      ok = ParseDuty(message, length, &i, &command->followup_duty_cycle);
+      break;
+    case 2:
+      ok = ParseNumber(message, length, &i, &command->followup_time);
+      break;
+    case 3:
+      ok = ParseDuty(message, length, &i, &command->hold_duty_cycle);
+      break;
+    default:
+      ok = 0; // too many fields
+    }
+    if (!ok)
+    {
+      return HAL_ERROR;
+    }
+  }
+
+  // Allow a trailing carriage return or spaces, nothing else.
+  while (i < length && (message[i] == '\r' || message[i] == ' '))
+  {
     i++;
   }
-
-  // Validate duty cycle range
-  if (duty_cycle < 0 || duty_cycle > 100)
-  {
-    return HAL_ERROR;
-  }
-
-  command->duty_cycle = duty_cycle;
-
-  if (command->type == COMMAND_RELEASE)
-  {
-    return HAL_OK;
-  }
-
-  // Parse optional parameters for press commands
-  while (i < length && message[i] == ':')
-  {
-    i++; // Skip the colon
-
-    // Parse next parameter
-    int param_value = 0;
-    while (i < length && isdigit(message[i]))
-    {
-      param_value = param_value * 10 + (message[i] - '0');
-      i++;
-    }
-
-    // Determine which parameter this is based on current state
-    if (command->initial_strike_time == 0) // First optional parameter
-    {
-      command->initial_strike_time = param_value;
-    }
-    else if (command->followup_duty_cycle == 0) // Second optional parameter
-    {
-      command->followup_duty_cycle = param_value;
-    }
-    else if (command->followup_time == 0) // Third optional parameter
-    {
-      command->followup_time = param_value;
-    }
-    else if (command->hold_duty_cycle > 100) // Fourth optional parameter (255 = not set)
-    {
-      command->hold_duty_cycle = param_value;
-    }
-    else
-    {
-      return HAL_ERROR; // Too many parameters
-    }
-  }
-
-  // Validate follow-up duty cycle if specified
-  if (command->followup_duty_cycle < 0 || command->followup_duty_cycle > 100)
-  {
-    return HAL_ERROR;
-  }
-
-  // Validate hold duty cycle if specified (255 = omitted)
-  if (command->hold_duty_cycle != 255 && command->hold_duty_cycle > 100)
-  {
-    return HAL_ERROR;
-  }
-
-  return HAL_OK;
+  return i == length ? HAL_OK : HAL_ERROR;
 }
 
 void CommandParser_ExecuteCommand(const ParsedCommand_t *command, KeyDriverModule_t *key_driver)
@@ -170,12 +195,41 @@ void CommandParser_ExecuteCommand(const ParsedCommand_t *command, KeyDriverModul
   }
 }
 
+// "RESET:ALL", or "RESET:<n>" for board n: a safety net that restarts the
+// driver from any bad state. The controller sends it before each song.
+static int IsResetForThisBoard(const char *message, uint16_t length)
+{
+  static const char prefix[] = "RESET:";
+  const uint16_t prefix_length = sizeof(prefix) - 1;
+  while (length > 0 && (message[length - 1] == '\r' || message[length - 1] == ' '))
+  {
+    length--;
+  }
+  if (length <= prefix_length || strncmp(message, prefix, prefix_length) != 0)
+  {
+    return 0;
+  }
+  const char *target = message + prefix_length;
+  uint16_t target_length = length - prefix_length;
+  if (target_length == 3 && strncmp(target, "ALL", 3) == 0)
+  {
+    return 1;
+  }
+  return target_length == 1 && target[0] == '0' + BOARD_NUMBER;
+}
+
 // Internal callback function for RS485 messages
 static void CommandParser_RS485Callback(const char *message, uint16_t length)
 {
   if (message == NULL)
   {
     return;
+  }
+
+  if (IsResetForThisBoard(message, length))
+  {
+    // A full restart; the PWM outputs switch off with it, so every solenoid lets go.
+    NVIC_SystemReset();
   }
 
   // Format: "P:42:100" or "R:42:0" where the number is a piano key (0-87)
@@ -241,16 +295,15 @@ HAL_StatusTypeDef CommandQueue_Init(CommandQueue_t *queue)
 
   queue->head = 0;
   queue->tail = 0;
-  queue->count = 0;
 
   return HAL_OK;
 }
 
 /**
- * @brief Add command to queue
+ * @brief Add command to queue. Called only from the serial interrupt.
  * @param queue: Pointer to queue structure
  * @param command: Pointer to command to enqueue
- * @return HAL status
+ * @return HAL status (HAL_ERROR when full: the command is dropped)
  */
 HAL_StatusTypeDef CommandQueue_Enqueue(CommandQueue_t *queue, const ParsedCommand_t *command)
 {
@@ -259,25 +312,24 @@ HAL_StatusTypeDef CommandQueue_Enqueue(CommandQueue_t *queue, const ParsedComman
     return HAL_ERROR;
   }
 
-  // Check if queue is full
-  if (CommandQueue_IsFull(queue))
+  uint8_t next = (uint8_t)((queue->tail + 1) % COMMAND_QUEUE_SIZE);
+  if (next == queue->head)
   {
-    return HAL_ERROR; // Queue overflow
+    return HAL_ERROR; // full
   }
 
-  // Add command to queue
   queue->commands[queue->tail] = *command;
-  queue->tail = (queue->tail + 1) % COMMAND_QUEUE_SIZE;
-  queue->count++;
+  __DMB(); // the command is fully written before the main loop can see it
+  queue->tail = next;
 
   return HAL_OK;
 }
 
 /**
- * @brief Remove command from queue
+ * @brief Remove command from queue. Called only from the main loop.
  * @param queue: Pointer to queue structure
  * @param command: Pointer to store dequeued command
- * @return HAL status
+ * @return HAL status (HAL_ERROR when empty)
  */
 HAL_StatusTypeDef CommandQueue_Dequeue(CommandQueue_t *queue, ParsedCommand_t *command)
 {
@@ -286,16 +338,16 @@ HAL_StatusTypeDef CommandQueue_Dequeue(CommandQueue_t *queue, ParsedCommand_t *c
     return HAL_ERROR;
   }
 
-  // Check if queue is empty
-  if (CommandQueue_IsEmpty(queue))
+  uint8_t head = queue->head;
+  if (head == queue->tail)
   {
-    return HAL_ERROR; // Queue empty
+    return HAL_ERROR; // empty
   }
 
-  // Remove command from queue
-  *command = queue->commands[queue->head];
-  queue->head = (queue->head + 1) % COMMAND_QUEUE_SIZE;
-  queue->count--;
+  __DMB(); // read the command only after seeing it was queued
+  *command = queue->commands[head];
+  __DMB(); // finish reading before handing the slot back to the interrupt
+  queue->head = (uint8_t)((head + 1) % COMMAND_QUEUE_SIZE);
 
   return HAL_OK;
 }
@@ -312,7 +364,7 @@ uint8_t CommandQueue_IsEmpty(const CommandQueue_t *queue)
     return 1;
   }
 
-  return (queue->count == 0);
+  return queue->head == queue->tail;
 }
 
 /**
@@ -327,7 +379,7 @@ uint8_t CommandQueue_IsFull(const CommandQueue_t *queue)
     return 1;
   }
 
-  return (queue->count >= COMMAND_QUEUE_SIZE);
+  return (uint8_t)((queue->tail + 1) % COMMAND_QUEUE_SIZE) == queue->head;
 }
 
 /**

@@ -5,14 +5,59 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Driver test</title>
 <link rel="stylesheet" href="/assets/style.css">
+<link rel="stylesheet" href="/test/test.css">
 </head>
 <body>
 <h1>Driver test</h1>
-<form id="form">
-  <input id="command" placeholder="P:20:60" autocomplete="off" autofocus>
-  <button type="submit">Send</button>
-</form>
+
+<section>
+  <h2>Keys</h2>
+  <p class="hint">Click a key to strike it with the duty and hold below.</p>
+  <div class="keyboard-scroll">
+    <div class="keyboard" id="keyboard" role="group" aria-label="Keyboard"></div>
+  </div>
+  <div class="row">
+    <label>Key <select id="key"></select></label>
+    <label>Duty
+      <input type="range" id="duty-range" min="0" max="100" step="0.25">
+      <input type="number" id="duty" min="0" max="100" step="0.25" class="short">%</label>
+    <label>Hold <input type="number" id="hold" min="20" max="5000" step="10" class="short"> ms</label>
+  </div>
+  <div class="row">
+    <button type="button" id="strike">Strike</button>
+    <button type="button" id="press">Press</button>
+    <button type="button" id="release">Release</button>
+  </div>
+</section>
+
+<section>
+  <h2>Sustain pedal</h2>
+  <div class="row">
+    <button type="button" id="pedal-press">Press</button>
+    <button type="button" id="pedal-release">Release</button>
+  </div>
+</section>
+
+<section>
+  <h2>Everything</h2>
+  <div class="row">
+    <button type="button" id="release-all">Release all keys</button>
+    <button type="button" id="reset">Restart drivers</button>
+  </div>
+</section>
+
+<section>
+  <h2>Command</h2>
+  <form id="form">
+    <input id="command" placeholder="P:20:60.25" autocomplete="off">
+    <button type="submit">Send</button>
+  </form>
+  <div class="history" id="history"></div>
+</section>
+
+<h2>Log</h2>
 <pre id="log"></pre>
+
 <script src="/test/app.js"></script>
 </body>
 </html>

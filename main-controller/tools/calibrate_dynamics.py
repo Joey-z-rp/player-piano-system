@@ -19,8 +19,12 @@ Steps:
        python3 tools/calibrate_dynamics.py measure
      To recalibrate some keys, replacing their earlier results:
        python3 tools/calibrate_dynamics.py measure --keys 39 --redo
-  4. Work out each key's min duty, max duty and loudness curve:
-       python3 tools/calibrate_dynamics.py analyze
+  4. Build the velocity table the controller plays from (also prints each
+     key's min duty, max duty and range, with any warnings), then upload it:
+       python3 tools/calibrate_dynamics.py table
+       pio run -t uploadfs
+  5. See it all as charts in the browser (writes calibration/report.html):
+       python3 tools/calibrate_dynamics.py report
 
 Each key is first searched in DUTY_STEP steps, one strike each, for the duty
 where it starts to sound. It's then swept in FINE_STEP steps around that
@@ -61,7 +65,7 @@ HOST = None  # controller address, for CONNECTION = "wifi"
 DEVICE = "Samson"  # input device number or name from `devices`; None = system default
 SAMPLE_RATE = 48000
 # The microphone gain relative to the first session, in dB. Every strike is
-# saved with it, and analyze converts levels back to the first session's gain
+# saved with it, and levels are converted back to the first session's gain
 # so keys measured at different gains can be compared. If you change the gain,
 # remeasure a key or two that were measured before and set this to the average
 # level difference (e.g. -4.0 if levels came out 4 dB lower).
@@ -93,17 +97,39 @@ SPREAD_DB = 1.5  # 3 strikes further apart than this get 2 more
 FLAT_DB = 0.5  # two DUTY_STEP spans in a row adding less than this = saturated
 
 # Analysis
-MIN_MARGIN = 2  # added to the lowest reliable duty, for safety
+MIN_MARGIN = 0  # added to the lowest reliable duty, for safety
 # Occasionally a strike sounds at full strength but stops within 100 ms (the
 # note is cut short rather than not struck). Above a key's threshold, one such
 # miss per level, within CUT_SHORT_DB of that level's hits, is tolerated and
 # listed instead of making the level count as unreliable.
 CUT_SHORT_DB = 5
 
+# Velocity mapping (table and report). Velocity picks a level between a key's
+# softest and loudest, in dB; those ends are the median over the key and its
+# neighbours, so neighbouring keys sound alike at the same velocity. A key
+# that can't reach a level plays the nearest one it can.
+NEIGHBOUR_KEYS = 4  # keys on each side the soft and loud levels are smoothed over
+# How far each key's softest and loudest levels move towards its neighbours'
+# median: 1 = all the way (neighbouring keys match), 0 = not at all (each key
+# uses its own full range), 0.5 = halfway.
+SMOOTHING = 1.0
+TILT_DB = (
+    0.0  # added to the lowest key, sliding to 0 at the highest: + makes the bass louder
+)
+KEY_TRIMS_DB: dict[
+    int, float
+] = {}  # per key, by ear: e.g. {64: 1.5} plays key 64 1.5 dB louder
+# The drivers' PWM sets duty in 0.25% steps (400 steps per cycle at 8 MHz and
+# 20 kHz), so the table uses those steps too.
+DUTY_RESOLUTION = 0.25
+
 # Files (relative to the main-controller folder)
 PROJECT_DIR = Path(__file__).resolve().parent.parent
 RAW_FILE = PROJECT_DIR / "calibration" / "raw.csv"
-OUT_FILE = PROJECT_DIR / "calibration" / "dynamics.json"
+TABLE_FILE = (
+    PROJECT_DIR / "data" / "velocity_table.json"
+)  # uploaded with `pio run -t uploadfs`
+REPORT_FILE = PROJECT_DIR / "calibration" / "report.html"
 
 # ============================================================================
 
@@ -775,7 +801,7 @@ def devices(_args) -> None:
     print(sounddevice.query_devices())
 
 
-# --- analyze -----------------------------------------------------------------
+# --- analysis ----------------------------------------------------------------
 
 
 def is_cut_short(rows: list[dict], cut_short_db: float) -> bool:
@@ -790,73 +816,271 @@ def is_cut_short(rows: list[dict], cut_short_db: float) -> bool:
     )
 
 
-def analyze(args) -> None:
-    rows = load_raw(args.raw)
-    if not rows:
-        sys.exit(f"no measurements in {args.raw}")
+def summarize_key(levels: dict[int, list[dict]], args) -> dict | None:
+    """Applies the analysis rules to one key's strikes, grouped by duty.
+    Returns None if the key never played reliably."""
+    duties = sorted(levels)
+    reliable = [d for d in duties if all(r["hit"] for r in levels[d])]
+    # min: lowest reliable duty with every level above it also reliable,
+    # apart from single cut-short strikes.
+    threshold = None
+    cut_short = []
+    for duty in reversed(duties):
+        if duty in reliable:
+            threshold = duty
+        elif threshold is not None and is_cut_short(levels[duty], args.cut_short_db):
+            cut_short.append(duty)
+        else:
+            break
+    if threshold is None:
+        return None
 
+    curve = []
+    loudest = -np.inf
+    for duty in duties:
+        if duty < threshold:
+            continue
+        # In the first session's terms, so keys measured at different gains compare.
+        median = statistics.median(
+            r["peak_db"] - r["gain_db"] for r in levels[duty] if r["hit"]
+        )
+        loudest = max(loudest, median)  # keep the curve rising so it can be inverted
+        curve.append([duty, round(loudest, 2)])
+
+    # max: where two DUTY_STEP spans in a row add under --flat-db.
+    max_duty = saturation_start(curve, args.step, args.flat_db) or curve[-1][0]
+    min_duty = min(threshold + args.min_margin, max_duty)
+    return {
+        "key": next(iter(levels.values()))[0]["key"],
+        "threshold": threshold,
+        "min": min_duty,
+        # The softest the key will be asked to play: its level at the min duty.
+        "min_db": round(
+            float(np.interp(min_duty, [d for d, _ in curve], [db for _, db in curve])),
+            2,
+        ),
+        "max": max_duty,
+        "curve": curve,
+        "soft_db": curve[0][1],  # softest measured, at the threshold
+        "loud_db": max(db for duty, db in curve if duty <= max_duty),
+        "cut_short": sorted(d for d in cut_short if d > threshold),
+        "clipped": sum(
+            1 for d in duties for r in levels[d] if r["sample_peak_db"] > CLIP_DBFS
+        ),
+    }
+
+
+def load_by_key(path: Path) -> dict[int, dict[int, list[dict]]]:
+    rows = load_raw(path)
+    if not rows:
+        sys.exit(f"no measurements in {path}")
     by_key: dict[int, dict[int, list[dict]]] = defaultdict(lambda: defaultdict(list))
     for row in rows:
         by_key[row["key"]][row["duty"]].append(row)
+    return by_key
 
-    result = {}
+
+def duty_for_level(summary: dict, target_db: float) -> float:
+    """The duty that plays target_db on a key, read off its curve: clamped to
+    the levels the key can reach and to its safe minimum and maximum duty, in
+    DUTY_RESOLUTION steps."""
+    levels, duties = [], []
+    for duty, db in summary["curve"]:
+        # The curve never falls but can be flat: keep the lowest duty for each level.
+        if duty <= summary["max"] and (not levels or db > levels[-1]):
+            levels.append(db)
+            duties.append(duty)
+    duty = float(np.interp(target_db, levels, duties))  # holds at the ends
+    duty = min(max(duty, summary["min"]), summary["max"])
+    return round(round(duty / DUTY_RESOLUTION) * DUTY_RESOLUTION, 2)
+
+
+def level_at_duty(summary: dict, duty: float) -> float:
+    curve = summary["curve"]
+    return float(np.interp(duty, [d for d, _ in curve], [db for _, db in curve]))
+
+
+def build_mapping(by_key: dict[int, dict[int, list[dict]]], args) -> dict[int, dict]:
+    """Each key that plays reliably: its summary (see summarize_key), its
+    neighbour-smoothed softest and loudest levels, and the duty for each
+    velocity 1-127. The softest end is what a key plays at its min duty, not
+    the softer level measured at its threshold, which it is never asked for.
+    Each end moves SMOOTHING of the way from the key's own level towards the
+    median of its neighbours'."""
+    summaries = {}
+    for key, levels in sorted(by_key.items()):
+        summary = summarize_key(levels, args)
+        if summary is not None:
+            summaries[key] = summary
+
+    mapping = {}
+    for key, summary in summaries.items():
+        near = [
+            n for n in summaries.values() if abs(n["key"] - key) <= args.neighbour_keys
+        ]
+        soft = summary["min_db"] + args.smoothing * (statistics.median(n["min_db"] for n in near) - summary["min_db"])
+        loud = summary["loud_db"] + args.smoothing * (statistics.median(n["loud_db"] for n in near) - summary["loud_db"])
+        offset = args.tilt_db * (1 - key / (PIANO_KEYS - 1)) + KEY_TRIMS_DB.get(
+            key, 0.0
+        )
+        duties = [
+            duty_for_level(summary, soft + (v - 1) / 126 * (loud - soft) + offset)
+            for v in range(1, 128)
+        ]
+        mapping[key] = {
+            **summary,
+            "smooth_soft_db": soft,
+            "smooth_loud_db": loud,
+            "offset_db": offset,
+            "duties": duties,
+        }
+    return mapping
+
+
+def print_key_log(by_key: dict, mapping: dict) -> None:
     for key in sorted(by_key):
-        levels = by_key[key]
-        duties = sorted(levels)
-        reliable = [d for d in duties if all(r["hit"] for r in levels[d])]
-        # min: lowest reliable duty with every level above it also reliable,
-        # apart from single cut-short strikes.
-        min_duty = None
-        cut_short = []
-        for duty in reversed(duties):
-            if duty in reliable:
-                min_duty = duty
-            elif min_duty is not None and is_cut_short(levels[duty], args.cut_short_db):
-                cut_short.append(duty)
-            else:
-                break
-        if min_duty is None:
-            print(f"key {key:2d}: never played reliably")
-            continue
-        cut_short = sorted(d for d in cut_short if d > min_duty)
-
-        curve = []
-        loudest = -np.inf
-        for duty in duties:
-            if duty < min_duty:
-                continue
-            # In the first session's terms, so keys measured at different gains compare.
-            median = statistics.median(
-                r["peak_db"] - r["gain_db"] for r in levels[duty] if r["hit"]
+        m = mapping.get(key)
+        if m is None:
+            print(
+                f"key {key:2d}: never played reliably, left out (it plays the default mapping)"
             )
-            loudest = max(
-                loudest, median
-            )  # keep the curve rising so it can be inverted
-            curve.append([duty, round(loudest, 2)])
-
-        # max: where two DUTY_STEP spans in a row add under --flat-db.
-        max_duty = saturation_start(curve, args.step, args.flat_db) or curve[-1][0]
-
-        safe_min = min(min_duty + args.min_margin, max_duty)
-        result[str(key)] = {"min": safe_min, "max": max_duty, "curve": curve}
-        note = (
-            f"  (ignored a cut-short strike at {', '.join(f'{d}%' for d in cut_short)})"
-            if cut_short
-            else ""
-        )
-        clipped = sum(
-            1 for d in duties for r in levels[d] if r["sample_peak_db"] > CLIP_DBFS
-        )
-        if clipped:
-            note += f"  !! CLIPPED in {clipped} strikes: redo at a lower mic gain"
+            continue
+        note = ""
+        if m["cut_short"]:
+            note = f"  (ignored a cut-short strike at {', '.join(f'{d}%' for d in m['cut_short'])})"
+        if m["clipped"]:
+            note += f"  !! CLIPPED in {m['clipped']} strikes: redo at a lower mic gain"
         print(
-            f"key {key:2d}: min {safe_min:3d}  max {max_duty:3d}  "
-            f"range {curve[-1][1] - curve[0][1]:5.1f} dB  ({curve[0][1]:.1f} to {curve[-1][1]:.1f}){note}"
+            f"key {key:2d}: min {m['min']:3d}  max {m['max']:3d}  "
+            f"range {m['loud_db'] - m['min_db']:5.1f} dB  ({m['min_db']:.1f} to {m['loud_db']:.1f}){note}"
         )
 
+
+def table(args) -> None:
+    """Writes the velocity table the controller plays from: for each calibrated
+    key, the duty for every velocity, plus the measurements and settings it
+    came from so a change can be traced."""
+    by_key = load_by_key(args.raw)
+    mapping = build_mapping(by_key, args)
+    print_key_log(by_key, mapping)
+
+    def entry(m: dict) -> dict:
+        return {
+            "duty": m["duties"],
+            "min": m["min"],
+            "max": m["max"],
+            "min_db": m["min_db"],
+            "loud_db": round(m["loud_db"], 2),
+            "smooth_soft_db": round(m["smooth_soft_db"], 2),
+            "smooth_loud_db": round(m["smooth_loud_db"], 2),
+            "offset_db": round(m["offset_db"], 2),
+            "curve": m["curve"],
+        }
+
+    header = {
+        "generated": time.strftime("%Y-%m-%d %H:%M"),
+        "source": args.raw.name,
+        "settings": {
+            "neighbour_keys": args.neighbour_keys,
+            "smoothing": args.smoothing,
+            "tilt_db": args.tilt_db,
+            "key_trims_db": {str(k): v for k, v in sorted(KEY_TRIMS_DB.items())},
+        },
+    }
+    # One key per line, so a change shows up clearly in a diff.
+    lines = (
+        ["{"]
+        + [f"  {json.dumps(k)}: {json.dumps(v)}," for k, v in header.items()]
+        + ['  "keys": {']
+    )
+    keys = sorted(mapping)
+    for i, key in enumerate(keys):
+        comma = "," if i < len(keys) - 1 else ""
+        lines.append(
+            f'    "{key}": {json.dumps(entry(mapping[key]), separators=(",", ":"))}{comma}'
+        )
+    lines += ["  }", "}"]
     args.out.parent.mkdir(parents=True, exist_ok=True)
-    args.out.write_text(json.dumps({"keys": result}, indent=1))
-    print(f"wrote {args.out} ({len(result)} keys)")
+    args.out.write_text("\n".join(lines) + "\n")
+    print(f"wrote {args.out} ({len(mapping)} keys; others play the default mapping)")
+    print("upload it to the controller with: pio run -t uploadfs")
+
+
+def report(args) -> None:
+    """Writes a page of charts of the calibration and the velocity mapping
+    (calibration_report.html filled with this data) and opens it."""
+    by_key = load_by_key(args.raw)
+    mapping = build_mapping(by_key, args)
+    levels_out, keys_out = [], []
+    for key, levels in sorted(by_key.items()):
+        m = mapping.get(key)
+        if m is None:
+            print(f"key {key:2d}: never played reliably, left out")
+            continue
+        curve = dict(m["curve"])
+        for duty in sorted(levels):
+            hits = [r["peak_db"] - r["gain_db"] for r in levels[duty] if r["hit"]]
+            levels_out.append(
+                {
+                    "key": key,
+                    "note": note_name(key),
+                    "duty": duty,
+                    "strikes": len(levels[duty]),
+                    "hits": len(hits),
+                    "level_db": round(statistics.median(hits), 2) if hits else None,
+                    "curve_db": curve.get(duty),
+                    "reliable": int(len(hits) == len(levels[duty])),
+                }
+            )
+        own_v64 = m["min_db"] + 63 / 126 * (m["loud_db"] - m["min_db"])
+        keys_out.append(
+            {
+                "key": key,
+                "note": note_name(key),
+                "threshold_duty": m["threshold"],
+                "min_duty": m["min"],
+                "max_duty": m["max"],
+                "soft_db": m["soft_db"],
+                "min_db": m["min_db"],
+                "loud_db": round(m["loud_db"], 2),
+                "range_db": round(m["loud_db"] - m["min_db"], 2),
+                "gain_db": levels[min(levels)][0]["gain_db"],
+                "cut_short": " ".join(f"{d}%" for d in m["cut_short"]),
+                "smooth_soft_db": round(m["smooth_soft_db"], 2),
+                "smooth_loud_db": round(m["smooth_loud_db"], 2),
+                "offset_db": round(m["offset_db"], 2),
+                # What velocity 64 plays: mapped onto the key's own range, and as the table maps it.
+                "v64_own_db": round(own_v64, 2),
+                "v64_mapped_db": round(level_at_duty(m, m["duties"][63]), 2),
+                "v64_duty": m["duties"][63],
+                "duties": m["duties"],
+            }
+        )
+
+    template = (Path(__file__).resolve().parent / "calibration_report.html").read_text()
+    data = {
+        "levels": levels_out,
+        "keys": keys_out,
+        "source": str(args.raw),
+        "generated": time.strftime("%Y-%m-%d %H:%M"),
+        "settings": {
+            "neighbour_keys": args.neighbour_keys,
+            "smoothing": args.smoothing,
+            "tilt_db": args.tilt_db,
+            "trims": len(KEY_TRIMS_DB),
+        },
+    }
+    # "</" would end the <script> the data sits in.
+    page = template.replace(
+        "__CALIBRATION_DATA__", json.dumps(data).replace("</", "<\\/")
+    )
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    args.out.write_text(page)
+    print(f"wrote {args.out} ({len(keys_out)} keys)")
+    if args.open:
+        import webbrowser
+
+        webbrowser.open(args.out.resolve().as_uri())
 
 
 # --- cli ---------------------------------------------------------------------
@@ -964,33 +1188,61 @@ def main() -> None:
     p.add_argument("--raw", type=Path, default=RAW_FILE)
     p.set_defaults(run=measure)
 
-    p = commands.add_parser("analyze", help="work out min, max and curve per key")
-    p.add_argument("--raw", type=Path, default=RAW_FILE)
-    p.add_argument("--out", type=Path, default=OUT_FILE)
-    p.add_argument(
-        "--flat-db",
-        type=float,
-        default=FLAT_DB,
-        help="gain per step treated as saturated",
+    def add_mapping(p):
+        p.add_argument("--raw", type=Path, default=RAW_FILE)
+        p.add_argument(
+            "--flat-db",
+            type=float,
+            default=FLAT_DB,
+            help="gain per step treated as saturated",
+        )
+        p.add_argument(
+            "--min-margin",
+            type=int,
+            default=MIN_MARGIN,
+            help="added to the lowest reliable duty",
+        )
+        p.add_argument(
+            "--step",
+            type=int,
+            default=DUTY_STEP,
+            help="span over which saturation is judged",
+        )
+        p.add_argument(
+            "--cut-short-db", type=float, default=CUT_SHORT_DB, help="see CUT_SHORT_DB"
+        )
+        p.add_argument(
+            "--neighbour-keys",
+            type=int,
+            default=NEIGHBOUR_KEYS,
+            help="see NEIGHBOUR_KEYS",
+        )
+        p.add_argument("--smoothing", type=float, default=SMOOTHING, help="see SMOOTHING (0-1)")
+        p.add_argument("--tilt-db", type=float, default=TILT_DB, help="see TILT_DB")
+
+    p = commands.add_parser(
+        "table", help="build the velocity table the controller plays from"
     )
-    p.add_argument(
-        "--min-margin",
-        type=int,
-        default=MIN_MARGIN,
-        help="added to the lowest reliable duty",
+    add_mapping(p)
+    p.add_argument("--out", type=Path, default=TABLE_FILE)
+    p.set_defaults(run=table)
+
+    p = commands.add_parser(
+        "report", help="write calibration/report.html, a page of charts, and open it"
     )
+    add_mapping(p)
+    p.add_argument("--out", type=Path, default=REPORT_FILE)
     p.add_argument(
-        "--step",
-        type=int,
-        default=DUTY_STEP,
-        help="span over which saturation is judged",
+        "--no-open",
+        dest="open",
+        action="store_false",
+        help="write the page without opening it",
     )
-    p.add_argument(
-        "--cut-short-db", type=float, default=CUT_SHORT_DB, help="see CUT_SHORT_DB"
-    )
-    p.set_defaults(run=analyze)
+    p.set_defaults(run=report)
 
     args = parser.parse_args()
+    if not 0 <= getattr(args, "smoothing", 0) <= 1:
+        sys.exit("SMOOTHING must be between 0 and 1")
     args.run(args)
 
 

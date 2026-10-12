@@ -1,5 +1,8 @@
 #include <Arduino.h>
+#include <LittleFS.h>
+#include <string>
 #include "app/piano/piano_controller.h"
+#include "app/piano/velocity_table.h"
 #include "led_control.h"
 #include "rs485.h"
 #include "serial_commands.h"
@@ -8,10 +11,40 @@
 
 LedControl ledControl;
 Rs485Module rs485;
+VelocityTable velocityTable;
 PianoController piano;
 SerialCommands serialCommands;
 WiFiStationModule wifiStation;
 WebServerModule webServer;
+
+static const char VELOCITY_TABLE_PATH[] = "/velocity_table.json";
+
+// Without a usable table every key plays the default velocity mapping.
+static void loadVelocityTable()
+{
+  if (!LittleFS.begin(true))
+  {
+    Serial.println("Velocity table: LittleFS mount failed, using the default mapping");
+    return;
+  }
+  File file = LittleFS.open(VELOCITY_TABLE_PATH, "r");
+  if (!file)
+  {
+    Serial.println("Velocity table: none uploaded, using the default mapping");
+    return;
+  }
+  std::string json(file.size(), '\0');
+  size_t read = file.read(reinterpret_cast<uint8_t *>(&json[0]), json.size());
+  file.close();
+  std::string error = read == json.size() ? "" : "file read cut short";
+  if (!error.empty() || !velocityTable.load(json.data(), json.size(), error))
+  {
+    Serial.printf("Velocity table: %s, using the default mapping\n", error.c_str());
+    return;
+  }
+  Serial.printf("Velocity table: %u keys calibrated, the rest use the default mapping\n",
+                (unsigned)velocityTable.calibratedKeys());
+}
 
 void setup()
 {
@@ -38,7 +71,8 @@ void setup()
     return;
   }
 
-  if (!piano.init(&rs485))
+  loadVelocityTable();
+  if (!piano.init(&rs485, &velocityTable))
   {
     Serial.println("Failed to initialize piano controller");
     return;

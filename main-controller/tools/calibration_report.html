@@ -1,0 +1,783 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Piano dynamics calibration</title>
+<!-- Page template for `calibrate_dynamics.py report`, which replaces the data
+     placeholder near the end. The page itself is the same as the shared
+     dashboard's; the shell below gives it the colours, spacing and data
+     functions the dashboard would. -->
+<style>
+  :root {
+    color-scheme: light;
+    --font-anthropic-sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+    --font-anthropic-serif: Georgia, "Times New Roman", serif;
+    --color-bg: #f6f6f3; --color-panel: #fcfcfb; --color-fg: #0b0b0b; --color-fg-muted: #5f5e5a;
+    --color-border-line: #e1e0d9; --color-bad: #d03b3b;
+    --cds-text-secondary: #52514e; --cds-surface-popover: #ffffff; --cds-border: #e1e0d9;
+    --cds-shadow-popover: 0 4px 16px rgba(11, 11, 11, .08);
+    --cds-chart-grid: #ecebe5; --cds-chart-reference: #898781; --cds-chart-muted: #c3c2b7;
+    --series-1: #2a78d6; --series-2: #eb6834;
+    --cds-radius: 8px; --cds-gap-xs: 4px; --cds-gap-sm: 8px; --cds-gap-md: 16px; --cds-gap-lg: 24px;
+    --cds-pad-xs: 4px; --cds-pad-sm: 8px; --cds-pad-lg: 20px;
+    --cds-font-size-caption: 12px; --cds-font-size-body: 14px; --cds-font-size-heading: 16px; --cds-font-size-title: 30px;
+    --cds-font-weight-medium: 600; --cds-dur-slow: 300ms;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      color-scheme: dark;
+      --color-bg: #0d0d0d; --color-panel: #1a1a19; --color-fg: #ffffff; --color-fg-muted: #a9a89f;
+      --color-border-line: #2c2c2a;
+      --cds-text-secondary: #c3c2b7; --cds-surface-popover: #242422; --cds-border: #383835;
+      --cds-shadow-popover: 0 4px 16px rgba(0, 0, 0, .5);
+      --cds-chart-grid: #262624; --cds-chart-reference: #6f6e69; --cds-chart-muted: #4a4945;
+      --series-1: #3987e5; --series-2: #d95926;
+    }
+  }
+  [hidden] { display: none !important; }
+  body { margin: 0; background: var(--color-bg); color: var(--color-fg); font-family: var(--font-anthropic-sans); font-size: var(--cds-font-size-body); }
+  #dash-root { max-width: 80rem; margin-inline: auto; padding: 24px clamp(16px, 4vw, 40px) 48px; }
+  .dash-skeleton { color: transparent; background: var(--color-border-line); border-radius: 4px; }
+</style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>
+</head>
+<body>
+<div id="dash-root">
+<style>
+  .pc { display: grid; gap: var(--cds-gap-lg); font-family: var(--font-anthropic-sans); }
+  .pc-title { margin: 0; font-family: var(--font-anthropic-serif); font-weight: 400; font-size: var(--cds-font-size-title); text-wrap: balance; }
+  .pc-takeaway { margin: var(--cds-gap-xs) 0 0; color: var(--color-fg-muted); max-width: 70ch; }
+  .pc-figures { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 13rem), 1fr)); gap: var(--cds-gap-md); }
+  .pc-fig, .pc-card { background: var(--color-panel); border: 1px solid var(--color-border-line); border-radius: var(--cds-radius); padding: var(--cds-pad-lg); min-width: 0; }
+  .pc-fig { display: grid; gap: var(--cds-gap-xs); align-content: start; }
+  .pc-fig-label, .pc-fig-note, .pc-note, .pc-legend { font-size: var(--cds-font-size-caption); color: var(--color-fg-muted); }
+  .pc-fig-value { font-family: var(--font-anthropic-serif); font-weight: 400; font-size: var(--cds-font-size-title); }
+  .pc-card { display: grid; gap: var(--cds-gap-sm); align-content: start; }
+  .pc-card h2 { margin: 0; font-size: var(--cds-font-size-heading); font-weight: var(--cds-font-weight-medium); text-wrap: balance; }
+  .pc-note { margin: 0; max-width: 72ch; }
+  .pc-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: start; gap: var(--cds-gap-sm); }
+  .pc-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 22rem), 1fr)); gap: var(--cds-gap-md); }
+  .pc-plot { position: relative; min-width: 0; }
+  .pc-plot svg { display: block; overflow: visible; }
+  #heatmap { min-height: 320px; } #curve { min-height: 280px; } #ranges, #v64, #velocity { min-height: 240px; }
+  .pc-tick { font-size: var(--cds-font-size-caption); fill: var(--color-fg-muted); font-variant-numeric: tabular-nums; }
+  .pc-tip { position: absolute; z-index: 2; pointer-events: none; white-space: nowrap; font-size: var(--cds-font-size-caption);
+    background: var(--cds-surface-popover); border: 1px solid var(--cds-border); border-radius: var(--cds-radius);
+    box-shadow: var(--cds-shadow-popover); padding: var(--cds-pad-xs) var(--cds-pad-sm); display: grid; gap: 2px; }
+  .pc-tip-head { color: var(--cds-text-secondary); }
+  .pc-tip-row { display: flex; align-items: center; gap: var(--cds-gap-xs); }
+  .pc .pc-tip-row b { margin-left: auto; padding-left: var(--cds-gap-sm); font-weight: var(--cds-font-weight-medium); font-variant-numeric: tabular-nums; }
+  .pc-sw { width: .625rem; height: .625rem; border-radius: 2px; flex: none; }
+  .pc-legend { display: flex; flex-wrap: wrap; align-items: center; gap: var(--cds-gap-xs) var(--cds-gap-md); }
+  .pc-legend > span { display: inline-flex; align-items: center; gap: var(--cds-gap-xs); }
+  .pc-ramp { width: 6rem; height: .5rem; border-radius: 2px; }
+  .pc-line { width: 1.1rem; border-top: 2px solid var(--color-fg); }
+  .pc-line.pc-dashed { border-top-style: dashed; }
+  .pc-controls { display: flex; flex-wrap: wrap; align-items: center; gap: var(--cds-gap-xs); }
+  .pc-controls select, .pc-controls button { font: inherit; font-size: var(--cds-font-size-body); color: var(--color-fg); background: var(--color-bg);
+    border: 1px solid var(--color-border-line); border-radius: var(--cds-radius); padding: var(--cds-pad-xs) var(--cds-pad-sm); }
+  .pc-controls button { cursor: pointer; min-width: 2.25rem; }
+  .pc select:focus-visible, .pc button:focus-visible, .pc tr:focus-visible { outline: 2px solid var(--color-fg); outline-offset: 1px; }
+  .pc-failed { display: flex; align-items: center; justify-content: center; gap: var(--cds-gap-xs); min-height: inherit; font-size: var(--cds-font-size-caption); color: var(--color-fg-muted); }
+  .pc-dot { width: .375rem; height: .375rem; border-radius: 50%; background: var(--color-bad); }
+  .pc-table-wrap { max-height: 26rem; overflow: auto; }
+  .pc table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; font-size: var(--cds-font-size-body); }
+  .pc th { position: sticky; top: 0; background: var(--color-panel); text-align: right; font-weight: var(--cds-font-weight-medium); padding: 0; }
+  .pc th button { all: unset; box-sizing: border-box; width: 100%; text-align: inherit; cursor: pointer; display: block; padding: var(--cds-pad-xs) var(--cds-pad-sm); font-size: var(--cds-font-size-caption); color: var(--color-fg-muted); }
+  .pc th button:focus-visible { outline: 2px solid var(--color-fg); }
+  .pc td { text-align: right; padding: var(--cds-pad-xs) var(--cds-pad-sm); border-top: 1px solid var(--color-border-line); }
+  .pc th:nth-child(-n+2), .pc td:nth-child(-n+2) { text-align: left; }
+  .pc tbody tr { cursor: pointer; }
+  .pc tbody tr.pc-picked td:first-child { box-shadow: inset 3px 0 0 var(--color-fg); }
+  .pc tbody tr.pc-picked td { font-weight: var(--cds-font-weight-medium); }
+  @media (max-width: 40rem) { .pc .pc-wide { display: none; } }
+  .pc [data-dash-source-state=refreshing] { opacity: .5; transition: opacity var(--cds-dur-slow); }
+  .pc [data-dash-source-state=empty] { color: transparent; }
+</style>
+
+<div class="pc">
+  <header id="overview">
+    <h1 class="pc-title">Piano dynamics calibration</h1>
+    <p class="pc-takeaway">Every calibrated key plays reliably from somewhere between
+      <span data-source="summary" data-field="threshold_low">—</span>% and
+      <span data-source="summary" data-field="threshold_high">—</span>% duty, and a typical key gets
+      <span data-source="summary" data-field="median_range_db">—</span> dB louder from its softest to its loudest note.
+      Click any key in the charts to see its curve.</p>
+    <p class="pc-note" id="generated"></p>
+  </header>
+
+  <div class="pc-figures">
+    <div class="pc-fig">
+      <span class="pc-fig-label">Keys calibrated</span>
+      <span class="pc-fig-value dash-skeleton" data-source="summary" data-field="keys">—</span>
+      <span class="pc-fig-note">Key 87 (C8) has no solenoid yet</span>
+    </div>
+    <div class="pc-fig">
+      <span class="pc-fig-label">Plays reliably from</span>
+      <span class="pc-fig-value"><span data-source="summary" data-field="threshold_low">—</span>–<span data-source="summary" data-field="threshold_high">—</span>% duty</span>
+      <span class="pc-fig-note">Lowest duty that sounded on every strike, across keys</span>
+    </div>
+    <div class="pc-fig">
+      <span class="pc-fig-label">Typical loudness range</span>
+      <span class="pc-fig-value"><span data-source="summary" data-field="median_range_db">—</span> dB</span>
+      <span class="pc-fig-note">From the softest it plays (at its min duty) to its loudest, median across keys</span>
+    </div>
+  </div>
+
+  <section class="pc-card" id="heatmap-card">
+    <h2>Loudness by key and duty</h2>
+    <p class="pc-note">Each column is a key, each row a duty. Darker means louder. The solid line is each key's minimum duty, the dashed line the point where more duty stops making it louder.</p>
+    <div class="pc-plot" id="heatmap" data-source="levels keys"></div>
+    <div class="pc-legend" id="heatmap-legend">
+      <span><span id="ramp-lo"></span><span class="pc-ramp" id="ramp"></span><span id="ramp-hi"></span></span>
+      <span><span class="pc-sw" style="background: var(--cds-chart-muted)"></span>Sometimes didn't play</span>
+      <span><span class="pc-line"></span>Minimum duty</span>
+      <span><span class="pc-line pc-dashed"></span>Maximum duty</span>
+    </div>
+  </section>
+
+  <div class="pc-grid">
+    <section class="pc-card" id="curve-card">
+      <div class="pc-head">
+        <h2 id="curve-title">One key's curve</h2>
+        <div class="pc-controls">
+          <button type="button" id="key-prev" aria-label="Previous key">‹</button>
+          <select id="key-pick" aria-label="Key" data-source="keys"></select>
+          <button type="button" id="key-next" aria-label="Next key">›</button>
+        </div>
+      </div>
+      <p class="pc-note">Median loudness at each duty measured. Filled dots played on every strike, open dots only sometimes. The four keys on each side are drawn faintly behind it.</p>
+      <div class="pc-plot" id="curve" data-source="levels keys"></div>
+    </section>
+    <section class="pc-card" id="velocity-card">
+      <h2 id="velocity-title">Velocity to duty</h2>
+      <p class="pc-note">The duty the controller plays for each MIDI velocity on this key, from the velocity table. It never goes below the key's min duty or above its max.</p>
+      <div class="pc-plot" id="velocity" data-source="keys levels"></div>
+    </section>
+  </div>
+
+  <div class="pc-grid">
+    <section class="pc-card" id="ranges-card">
+      <h2>Each key's range, and its neighbours'</h2>
+      <p class="pc-note">Bars run from the softest each key plays (at its min duty) to its loudest. The lines are those ranges smoothed over neighbouring keys: velocity maps onto them.</p>
+      <div class="pc-plot" id="ranges" data-source="keys"></div>
+      <div class="pc-legend">
+        <span><span class="pc-sw" id="sw-own"></span>Each key's own range</span>
+        <span><span class="pc-line" id="ln-smooth"></span>Smoothed over neighbours</span>
+      </div>
+    </section>
+    <section class="pc-card" id="v64-card">
+      <h2>Where velocity 64 would land</h2>
+      <p class="pc-note">Mapped key by key, neighbouring keys can differ by up to
+        <span data-source="evenness" data-field="own_max_jump_db">—</span> dB at the same velocity. As the velocity table plays it, by up to
+        <span data-source="evenness" data-field="mapped_max_jump_db">—</span> dB.</p>
+      <div class="pc-plot" id="v64" data-source="keys"></div>
+      <div class="pc-legend">
+        <span><span class="pc-line" id="ln-own"></span>Each key on its own range</span>
+        <span><span class="pc-line" id="ln-even"></span>As the velocity table plays it</span>
+      </div>
+    </section>
+  </div>
+
+  <section class="pc-card" id="keys-table">
+    <h2>Every key</h2>
+    <p class="pc-note">Levels are A-weighted dB at the first session's microphone gain. Click a row to see its curve.</p>
+    <div class="pc-table-wrap">
+      <table data-source="keys" data-row-key="key">
+        <thead><tr>
+          <th data-field="key"><button type="button" data-sort="key">Key</button></th>
+          <th data-field="note"><button type="button" data-sort="note">Note</button></th>
+          <th data-field="threshold_duty" class="pc-wide"><button type="button" data-sort="threshold_duty">Threshold</button></th>
+          <th data-field="min_duty"><button type="button" data-sort="min_duty">Min duty</button></th>
+          <th data-field="max_duty"><button type="button" data-sort="max_duty">Max duty</button></th>
+          <th data-field="min_db" class="pc-wide"><button type="button" data-sort="min_db">Softest played</button></th>
+          <th data-field="loud_db" class="pc-wide"><button type="button" data-sort="loud_db">Loudest</button></th>
+          <th data-field="range_db"><button type="button" data-sort="range_db">Range</button></th>
+          <th data-field="cut_short" class="pc-wide"><button type="button" data-sort="cut_short">Cut-short ignored</button></th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+</div>
+
+</div>
+
+<script>window.CALIBRATION = __CALIBRATION_DATA__;</script>
+<script>
+// Stand-in for the dashboard's data functions: the data is embedded above,
+// calculations run once, and a key change or a resize redraws.
+window.dash = (() => {
+  const results = {};
+  const listeners = [];
+  let params = { key: 39 };
+  const data = (id) => {
+    if (id === 'levels' || id === 'keys') return { status: 'ok', data: window.CALIBRATION[id] };
+    if (id in results) return { status: 'ok', data: results[id] };
+    return { status: 'missing', data: [] };
+  };
+  const redraw = () => listeners.forEach((fn) => fn());
+  let pending;
+  const later = () => { clearTimeout(pending); pending = setTimeout(redraw, 100); };
+  window.addEventListener('resize', later);
+  window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', redraw);
+  return {
+    data,
+    calc: (id, spec) => { results[id] = spec.fn(...spec.inputs.map((input) => data(input).data)); },
+    onData: (fn) => { listeners.push(fn); fn(); },
+    params: () => ({ ...params }),
+    setParams: (next) => { params = { ...params, ...next }; redraw(); },
+    colors: ['var(--series-1)', 'var(--series-2)'],
+  };
+})();
+document.getElementById('generated').textContent =
+  `Generated ${window.CALIBRATION.generated} from ${window.CALIBRATION.source}. Velocity mapping: smoothing `
+  + `${window.CALIBRATION.settings.smoothing} over ${window.CALIBRATION.settings.neighbour_keys} keys on each side, `
+  + `tilt ${window.CALIBRATION.settings.tilt_db} dB, `
+  + `${window.CALIBRATION.settings.trims} per-key trims.`;
+</script>
+<script>
+(() => {
+  dash.calc('summary', {
+    inputs: ['keys'],
+    title: 'Calibration summary',
+    description: 'How many keys are calibrated, the lowest and highest threshold duty, and the median loudness range.',
+    fn: (keys) => {
+      const ranges = keys.map((k) => Number(k.range_db)).sort((a, b) => a - b);
+      const mid = ranges.length >> 1;
+      const median = ranges.length % 2 ? ranges[mid] : (ranges[mid - 1] + ranges[mid]) / 2;
+      const thresholds = keys.map((k) => Number(k.threshold_duty));
+      return [{ keys: keys.length, threshold_low: Math.min(...thresholds), threshold_high: Math.max(...thresholds),
+        median_range_db: Math.round(median * 10) / 10 }];
+    },
+  });
+
+  dash.calc('evenness', {
+    inputs: ['keys'],
+    title: 'Biggest jump between neighbours',
+    description: 'The largest difference in velocity-64 loudness between two neighbouring keys, mapped on their own ranges and as the velocity table plays it.',
+    fn: (keys) => {
+      const sorted = [...keys].sort((a, b) => a.key - b.key);
+      const jump = (field) => Math.max(...sorted.slice(1).map((k, i) =>
+        k.key - sorted[i].key === 1 ? Math.abs(k[field] - sorted[i][field]) : 0));
+      return [{ own_max_jump_db: Math.round(jump('v64_own_db') * 10) / 10,
+        mapped_max_jump_db: Math.round(jump('v64_mapped_db') * 10) / 10 }];
+    },
+  });
+
+  const root = document.getElementById('dash-root');
+  const f1 = d3.format('.1f');
+  const isC = (note) => /^C\d$/.test(note);
+
+  const computed = (expr) => {
+    const probe = document.createElement('span');
+    probe.style.color = expr;
+    root.appendChild(probe);
+    const value = getComputedStyle(probe).color;
+    probe.remove();
+    return value;
+  };
+
+  const status = (ids) => {
+    const s = ids.map((id) => dash.data(id).status);
+    if (s.every((x) => x === 'ok')) return 'ok';
+    if (s.some((x) => x === 'error' || x === 'missing' || x === 'declined')) return 'error';
+    return 'loading';
+  };
+
+  // Clears a chart box and shows its loading or failed state; true when it can draw.
+  const prepare = (el, st) => {
+    el.querySelectorAll('svg, .pc-failed').forEach((n) => n.remove());
+    el.classList.toggle('dash-skeleton', st === 'loading');
+    if (st === 'error') {
+      const line = document.createElement('div');
+      line.className = 'pc-failed';
+      const dot = document.createElement('span');
+      dot.className = 'pc-dot';
+      line.append(dot, 'Failed to load');
+      el.append(line);
+    }
+    return st === 'ok';
+  };
+
+  const tooltip = (box) => {
+    let tip = box.querySelector('.pc-tip');
+    if (!tip) {
+      tip = document.createElement('div');
+      tip.className = 'pc-tip';
+      tip.hidden = true;
+      box.append(tip);
+    }
+    return {
+      show(head, rows, x, y) {
+        const headEl = document.createElement('div');
+        headEl.className = 'pc-tip-head';
+        headEl.textContent = head;
+        tip.replaceChildren(headEl, ...rows.map(([swatch, label, value]) => {
+          const row = document.createElement('div');
+          row.className = 'pc-tip-row';
+          if (swatch) {
+            const sw = document.createElement('span');
+            sw.className = 'pc-sw';
+            sw.style.background = swatch;
+            row.append(sw);
+          }
+          const name = document.createElement('span');
+          name.textContent = label;
+          const val = document.createElement('b');
+          val.textContent = value;
+          row.append(name, val);
+          return row;
+        }));
+        tip.hidden = false;
+        const w = box.clientWidth, tw = tip.offsetWidth, th = tip.offsetHeight;
+        let left = x + 14;
+        if (left + tw > w) left = x - 14 - tw;
+        tip.style.left = Math.max(0, left) + 'px';
+        tip.style.top = (y - th - 10 < 0 ? y + 14 : y - th - 10) + 'px';
+      },
+      hide() { tip.hidden = true; },
+    };
+  };
+
+  const textWidth = (svg, text) => {
+    const probe = svg.append('text').attr('class', 'pc-tick').text(text);
+    const w = probe.node().getComputedTextLength();
+    probe.remove();
+    return w;
+  };
+
+  const pickKey = (key) => dash.setParams({ key: Number(key) });
+  const pickedKey = (keys) => {
+    const wanted = Number(dash.params().key);
+    return keys.some((k) => Number(k.key) === wanted) ? wanted : Number(keys[0].key);
+  };
+
+  // Key axis shared by the keyboard-wide charts: one band per key 0–87, C notes labelled.
+  const keyAxis = (svg, x, keys, y0) => {
+    const labels = svg.append('g');
+    keys.filter((k) => isC(k.note) || Number(k.key) === 0).forEach((k) => {
+      labels.append('text').attr('class', 'pc-tick').attr('text-anchor', 'middle')
+        .attr('x', x(Number(k.key)) + x.bandwidth() / 2).attr('y', y0 + 16).text(k.note);
+    });
+  };
+
+  // ---- heatmap ----
+  const drawHeatmap = () => {
+    const el = document.getElementById('heatmap');
+    const legendLo = document.getElementById('ramp-lo'), legendHi = document.getElementById('ramp-hi');
+    if (!prepare(el, status(['levels', 'keys']))) { legendLo.textContent = legendHi.textContent = ''; return; }
+    const levels = dash.data('levels').data, keys = dash.data('keys').data;
+    const picked = pickedKey(keys);
+    const W = el.clientWidth, H = 320;
+    const svg = d3.select(el).append('svg').attr('width', '100%').attr('viewBox', `0 0 ${W} ${H}`)
+      .attr('role', 'img').attr('aria-label', 'Loudness of every key at every duty measured');
+    const m = { top: 6, right: 4, bottom: 24, left: textWidth(svg, '100%') + 8 };
+    const x = d3.scaleBand(d3.range(0, 88), [m.left, W - m.right]);
+    const y = d3.scaleLinear([24, 101], [H - m.bottom, m.top]);
+
+    const reliable = levels.filter((l) => Number(l.reliable) && l.level_db != null).map((l) => Number(l.level_db));
+    const [lo, hi] = d3.extent(reliable);
+    const ramp = d3.interpolateRgb(computed('var(--color-panel)'), computed(dash.colors[0]));
+    const color = (v) => ramp(0.12 + 0.88 * (v - lo) / (hi - lo));
+    document.getElementById('ramp').style.background = `linear-gradient(to right, ${color(lo)}, ${color((lo + hi) / 2)}, ${color(hi)})`;
+    legendLo.textContent = `${f1(lo)} dB`;
+    legendHi.textContent = `${f1(hi)} dB`;
+
+    [25, 50, 75, 100].forEach((d) => {
+      svg.append('text').attr('class', 'pc-tick').attr('text-anchor', 'end').attr('dominant-baseline', 'middle')
+        .attr('x', m.left - 6).attr('y', y(d)).text(`${d}%`);
+    });
+
+    // Each measured duty fills up to the next one measured for that key.
+    const cells = [];
+    for (const [, rows] of d3.group(levels, (l) => Number(l.key))) {
+      const sorted = [...rows].sort((a, b) => a.duty - b.duty);
+      sorted.forEach((r, i) => {
+        const next = i + 1 < sorted.length ? Number(sorted[i + 1].duty) : Number(r.duty) + 1;
+        cells.push({ ...r, top: Math.min(next, 101) });
+      });
+    }
+    svg.append('g').selectAll('rect').data(cells.filter((c) => Number(c.hits) > 0)).join('rect')
+      .attr('x', (c) => x(Number(c.key))).attr('width', x.bandwidth() + 0.6)
+      .attr('y', (c) => y(c.top)).attr('height', (c) => Math.max(0.6, y(Number(c.duty)) - y(c.top) + 0.4))
+      .attr('fill', (c) => (Number(c.reliable) ? color(Number(c.level_db)) : 'var(--cds-chart-muted)'))
+      .attr('fill-opacity', (c) => (Number(c.reliable) ? 1 : 0.6));
+
+    const sortedKeys = [...keys].sort((a, b) => a.key - b.key);
+    const step = (field) => {
+      const pts = sortedKeys.map((k) => [x(Number(k.key)), y(Number(k[field]))]);
+      const last = sortedKeys[sortedKeys.length - 1];
+      pts.push([x(Number(last.key)) + x.bandwidth(), y(Number(last[field]))]);
+      return d3.line().curve(d3.curveStepAfter)(pts);
+    };
+    svg.append('path').attr('d', step('min_duty')).attr('fill', 'none').attr('stroke', 'var(--color-fg)').attr('stroke-width', 1.5);
+    svg.append('path').attr('d', step('max_duty')).attr('fill', 'none').attr('stroke', 'var(--color-fg)').attr('stroke-width', 1.5)
+      .attr('stroke-dasharray', '4 3');
+    svg.append('rect').attr('x', x(picked) - 0.5).attr('width', x.bandwidth() + 1.6).attr('y', m.top)
+      .attr('height', H - m.bottom - m.top).attr('fill', 'none').attr('stroke', 'var(--color-fg)').attr('stroke-width', 1.5).attr('rx', 2);
+    keyAxis(svg, x, sortedKeys, H - m.bottom);
+
+    const tip = tooltip(el);
+    const keyAt = (mx) => Math.floor((mx - m.left) / x.step());
+    svg.append('rect').attr('x', m.left).attr('y', m.top).attr('width', W - m.left - m.right).attr('height', H - m.top - m.bottom)
+      .attr('fill', 'transparent').style('cursor', 'pointer')
+      .on('pointermove', (event) => {
+        const [mx, my] = d3.pointer(event);
+        const key = keyAt(mx), duty = y.invert(my);
+        const info = keys.find((k) => Number(k.key) === key);
+        if (!info) { tip.hide(); return; }
+        const cell = cells.find((c) => Number(c.key) === key && Number(c.duty) <= duty && duty < c.top);
+        const rows = [['', 'Minimum duty', `${info.min_duty}%`], ['', 'Maximum duty', `${info.max_duty}%`]];
+        if (cell) {
+          rows.unshift(['', 'Played', `${cell.hits} of ${cell.strikes}`]);
+          if (cell.level_db != null) rows.unshift(['', 'Level', `${f1(cell.level_db)} dB`]);
+          rows.unshift(['', 'Duty', `${cell.duty}%`]);
+        }
+        tip.show(`Key ${key} · ${info.note}`, rows, mx, my);
+      })
+      .on('pointerleave', () => tip.hide())
+      .on('click', (event) => {
+        const key = keyAt(d3.pointer(event)[0]);
+        if (keys.some((k) => Number(k.key) === key)) pickKey(key);
+      });
+  };
+
+  // ---- one key's curve ----
+  const select = document.getElementById('key-pick');
+  select.addEventListener('change', () => pickKey(select.value));
+  const stepKey = (delta) => {
+    const keys = dash.data('keys').data || [];
+    if (!keys.length) return;
+    const order = keys.map((k) => Number(k.key)).sort((a, b) => a - b);
+    const i = order.indexOf(pickedKey(keys));
+    pickKey(order[Math.min(order.length - 1, Math.max(0, i + delta))]);
+  };
+  document.getElementById('key-prev').addEventListener('click', () => stepKey(-1));
+  document.getElementById('key-next').addEventListener('click', () => stepKey(1));
+
+  const drawCurve = () => {
+    const el = document.getElementById('curve');
+    const title = document.getElementById('curve-title');
+    const st = status(['levels', 'keys']);
+    if (dash.data('keys').status === 'ok') {
+      const keys = [...dash.data('keys').data].sort((a, b) => a.key - b.key);
+      select.replaceChildren(...keys.map((k) => new Option(`${k.key} · ${k.note}`, k.key)));
+      select.value = String(pickedKey(keys));
+    }
+    if (!prepare(el, st)) { title.textContent = "One key's curve"; return; }
+    const levels = dash.data('levels').data, keys = dash.data('keys').data;
+    const picked = pickedKey(keys);
+    const info = keys.find((k) => Number(k.key) === picked);
+    title.textContent = `Key ${picked} (${info.note}): loudness against duty`;
+
+    const mine = levels.filter((l) => Number(l.key) === picked).sort((a, b) => a.duty - b.duty);
+    const played = mine.filter((l) => l.level_db != null);
+    const neighbours = d3.groups(levels.filter((l) => Math.abs(l.key - picked) <= 4 && Number(l.key) !== picked
+      && Number(l.reliable) && l.level_db != null), (l) => Number(l.key));
+    const shown = played.concat(...neighbours.map(([, rows]) => rows)).map((l) => Number(l.level_db));
+
+    const W = el.clientWidth, H = 280;
+    const svg = d3.select(el).append('svg').attr('width', '100%').attr('viewBox', `0 0 ${W} ${H}`)
+      .attr('role', 'img').attr('aria-label', `Loudness against duty for key ${picked}`);
+    const [lo, hi] = d3.extent(shown);
+    const y = d3.scaleLinear([Math.floor(lo - 2), Math.ceil(hi + 2)], [H - 24, 22]).nice();
+    const yTicks = y.ticks(5);
+    const m = { top: 22, right: 8, bottom: 24, left: d3.max(yTicks, (t) => textWidth(svg, `${t} dB`)) + 8 };
+    const x = d3.scaleLinear([25, 100], [m.left, W - m.right]);
+
+    yTicks.forEach((t) => {
+      svg.append('line').attr('x1', m.left).attr('x2', W - m.right).attr('y1', y(t)).attr('y2', y(t))
+        .attr('stroke', 'var(--cds-chart-grid)').attr('stroke-width', 1);
+      svg.append('text').attr('class', 'pc-tick').attr('text-anchor', 'end').attr('dominant-baseline', 'middle')
+        .attr('x', m.left - 6).attr('y', y(t)).text(`${t} dB`);
+    });
+    [25, 40, 55, 70, 85, 100].forEach((d) => {
+      svg.append('text').attr('class', 'pc-tick').attr('text-anchor', 'middle').attr('x', x(d)).attr('y', H - 6).text(`${d}%`);
+    });
+
+    // Minimum and maximum duty, labelled at the top; labels move apart when the lines are close.
+    const refs = [['min', Number(info.min_duty)], ['max', Number(info.max_duty)]];
+    const close = x(refs[1][1]) - x(refs[0][1]) < 70;
+    refs.forEach(([name, d], i) => {
+      svg.append('line').attr('x1', x(d)).attr('x2', x(d)).attr('y1', m.top).attr('y2', H - m.bottom)
+        .attr('stroke', 'var(--cds-chart-reference)').attr('stroke-width', 1).attr('stroke-dasharray', '4 3');
+      svg.append('text').attr('class', 'pc-tick').attr('x', x(d) + (close && i === 0 ? -4 : 4))
+        .attr('text-anchor', close && i === 0 ? 'end' : 'start').attr('y', m.top - 8).text(`${name} ${d}%`);
+    });
+
+    const line = d3.line().x((l) => x(Number(l.duty))).y((l) => y(Number(l.level_db)));
+    neighbours.forEach(([, rows]) => {
+      svg.append('path').attr('d', line(rows.sort((a, b) => a.duty - b.duty))).attr('fill', 'none')
+        .attr('stroke', 'var(--cds-chart-muted)').attr('stroke-width', 1.5).attr('stroke-linejoin', 'round');
+    });
+    const series = dash.colors[0];
+    svg.append('path').attr('d', line(played)).attr('fill', 'none').attr('stroke', series).attr('stroke-width', 2)
+      .attr('stroke-linejoin', 'round').attr('stroke-linecap', 'round');
+    svg.append('g').selectAll('circle').data(played).join('circle')
+      .attr('cx', (l) => x(Number(l.duty))).attr('cy', (l) => y(Number(l.level_db))).attr('r', 4)
+      .attr('fill', (l) => (Number(l.reliable) ? series : 'var(--color-panel)'))
+      .attr('stroke', (l) => (Number(l.reliable) ? 'var(--color-panel)' : series)).attr('stroke-width', 2);
+
+    const tip = tooltip(el);
+    const focus = svg.append('circle').attr('r', 6).attr('fill', 'none').attr('stroke', series).attr('stroke-width', 2).attr('visibility', 'hidden');
+    svg.append('rect').attr('x', m.left).attr('y', m.top).attr('width', W - m.left - m.right).attr('height', H - m.top - m.bottom)
+      .attr('fill', 'transparent')
+      .on('pointermove', (event) => {
+        const [mx] = d3.pointer(event);
+        const near = d3.least(mine, (l) => Math.abs(x(Number(l.duty)) - mx));
+        if (!near) return;
+        const rows = [['', 'Played', `${near.hits} of ${near.strikes}`]];
+        if (near.level_db != null) {
+          rows.unshift(['', 'Level', `${f1(near.level_db)} dB`]);
+          focus.attr('cx', x(Number(near.duty))).attr('cy', y(Number(near.level_db))).attr('visibility', 'visible');
+        } else focus.attr('visibility', 'hidden');
+        tip.show(`Duty ${near.duty}%`, rows, x(Number(near.duty)), near.level_db != null ? y(Number(near.level_db)) : H - m.bottom);
+      })
+      .on('pointerleave', () => { tip.hide(); focus.attr('visibility', 'hidden'); });
+  };
+
+  // ---- each key's range ----
+  const drawRanges = () => {
+    const el = document.getElementById('ranges');
+    document.getElementById('sw-own').style.background = dash.colors[0];
+    document.getElementById('ln-smooth').style.borderTopColor = dash.colors[1];
+    if (!prepare(el, status(['keys']))) return;
+    const keys = [...dash.data('keys').data].sort((a, b) => a.key - b.key);
+    const smooth = keys;
+    const picked = pickedKey(keys);
+    const W = el.clientWidth, H = 240;
+    const svg = d3.select(el).append('svg').attr('width', '100%').attr('viewBox', `0 0 ${W} ${H}`)
+      .attr('role', 'img').attr('aria-label', 'Softest to loudest level of every key, with neighbour-smoothed lines');
+    const all = keys.flatMap((k) => [Number(k.min_db), Number(k.loud_db), Number(k.smooth_soft_db)]);
+    const y = d3.scaleLinear([d3.min(all) - 2, d3.max(all) + 2], [H - 24, 8]).nice();
+    const yTicks = y.ticks(5);
+    const m = { top: 8, right: 4, bottom: 24, left: d3.max(yTicks, (t) => textWidth(svg, `${t} dB`)) + 8 };
+    const x = d3.scaleBand(d3.range(0, 88), [m.left, W - m.right]);
+    yTicks.forEach((t) => {
+      svg.append('line').attr('x1', m.left).attr('x2', W - m.right).attr('y1', y(t)).attr('y2', y(t))
+        .attr('stroke', 'var(--cds-chart-grid)').attr('stroke-width', 1);
+      svg.append('text').attr('class', 'pc-tick').attr('text-anchor', 'end').attr('dominant-baseline', 'middle')
+        .attr('x', m.left - 6).attr('y', y(t)).text(`${t} dB`);
+    });
+    const bw = Math.max(1.5, Math.min(x.bandwidth() - 1, 8));
+    svg.append('g').selectAll('rect').data(keys).join('rect')
+      .attr('x', (k) => x(Number(k.key)) + (x.bandwidth() - bw) / 2).attr('width', bw)
+      .attr('y', (k) => y(Number(k.loud_db))).attr('height', (k) => y(Number(k.min_db)) - y(Number(k.loud_db)))
+      .attr('rx', Math.min(2, bw / 2)).attr('fill', dash.colors[0])
+      .attr('fill-opacity', (k) => (Number(k.key) === picked ? 1 : 0.45));
+    const center = (s) => x(Number(s.key)) + x.bandwidth() / 2;
+    ['smooth_soft_db', 'smooth_loud_db'].forEach((field) => {
+      svg.append('path').attr('d', d3.line().x(center).y((s) => y(Number(s[field])))(smooth)).attr('fill', 'none')
+        .attr('stroke', dash.colors[1]).attr('stroke-width', 2).attr('stroke-linejoin', 'round');
+    });
+    keyAxis(svg, x, keys, H - m.bottom);
+
+    const tip = tooltip(el);
+    svg.append('rect').attr('x', m.left).attr('y', m.top).attr('width', W - m.left - m.right).attr('height', H - m.top - m.bottom)
+      .attr('fill', 'transparent').style('cursor', 'pointer')
+      .on('pointermove', (event) => {
+        const [mx, my] = d3.pointer(event);
+        const key = Math.floor((mx - m.left) / x.step());
+        const k = keys.find((r) => Number(r.key) === key), s = smooth.find((r) => Number(r.key) === key);
+        if (!k || !s) { tip.hide(); return; }
+        tip.show(`Key ${key} · ${k.note}`, [
+          [dash.colors[0], 'Own range', `${f1(k.min_db)} to ${f1(k.loud_db)} dB`],
+          [dash.colors[1], 'Smoothed', `${f1(s.smooth_soft_db)} to ${f1(s.smooth_loud_db)} dB`],
+        ], mx, my);
+      })
+      .on('pointerleave', () => tip.hide())
+      .on('click', (event) => {
+        const key = Math.floor((d3.pointer(event)[0] - m.left) / x.step());
+        if (keys.some((k) => Number(k.key) === key)) pickKey(key);
+      });
+  };
+
+  // ---- velocity to duty ----
+  const drawVelocity = () => {
+    const el = document.getElementById('velocity');
+    const title = document.getElementById('velocity-title');
+    if (!prepare(el, status(['keys', 'levels']))) { title.textContent = 'Velocity to duty'; return; }
+    const keys = dash.data('keys').data, levels = dash.data('levels').data;
+    const picked = pickedKey(keys);
+    const info = keys.find((k) => Number(k.key) === picked);
+    title.textContent = `Key ${picked} (${info.note}): velocity to duty`;
+    const curve = levels.filter((l) => Number(l.key) === picked && l.curve_db != null).sort((a, b) => a.duty - b.duty);
+    // The key's measured level at a duty, between the measured points.
+    const levelAt = (duty) => {
+      const i = curve.findIndex((c) => Number(c.duty) >= duty);
+      if (i < 0) return Number(curve[curve.length - 1].curve_db);
+      if (i === 0) return Number(curve[0].curve_db);
+      const a = curve[i - 1], b = curve[i];
+      return Number(a.curve_db) + (duty - a.duty) / (b.duty - a.duty) * (b.curve_db - a.curve_db);
+    };
+    const points = info.duties.map((duty, i) => ({ velocity: i + 1, duty: Number(duty) }));
+
+    const W = el.clientWidth, H = 240;
+    const svg = d3.select(el).append('svg').attr('width', '100%').attr('viewBox', `0 0 ${W} ${H}`)
+      .attr('role', 'img').attr('aria-label', `Duty for each velocity on key ${picked}`);
+    const lo = Number(info.min_duty), hi = Number(info.max_duty);
+    const y = d3.scaleLinear([Math.max(0, lo - 3), Math.min(100, hi + 3)], [H - 24, 10]).nice();
+    const yTicks = y.ticks(5);
+    const m = { top: 10, right: textWidth(svg, 'max 100%') + 8, bottom: 24, left: d3.max(yTicks, (t) => textWidth(svg, `${t}%`)) + 8 };
+    const x = d3.scaleLinear([1, 127], [m.left, W - m.right]);
+    yTicks.forEach((t) => {
+      svg.append('line').attr('x1', m.left).attr('x2', W - m.right).attr('y1', y(t)).attr('y2', y(t))
+        .attr('stroke', 'var(--cds-chart-grid)').attr('stroke-width', 1);
+      svg.append('text').attr('class', 'pc-tick').attr('text-anchor', 'end').attr('dominant-baseline', 'middle')
+        .attr('x', m.left - 6).attr('y', y(t)).text(`${t}%`);
+    });
+    [1, 32, 64, 96, 127].forEach((v) => {
+      svg.append('text').attr('class', 'pc-tick').attr('text-anchor', 'middle').attr('x', x(v)).attr('y', H - 6).text(v);
+    });
+    [['min', lo], ['max', hi]].forEach(([name, d]) => {
+      svg.append('line').attr('x1', m.left).attr('x2', W - m.right).attr('y1', y(d)).attr('y2', y(d))
+        .attr('stroke', 'var(--cds-chart-reference)').attr('stroke-width', 1).attr('stroke-dasharray', '4 3');
+      svg.append('text').attr('class', 'pc-tick').attr('dominant-baseline', 'middle')
+        .attr('x', W - m.right + 6).attr('y', y(d)).text(`${name} ${d}%`);
+    });
+    const series = dash.colors[0];
+    svg.append('path').attr('d', d3.line().curve(d3.curveStepAfter).x((p) => x(p.velocity)).y((p) => y(p.duty))(points))
+      .attr('fill', 'none').attr('stroke', series).attr('stroke-width', 2).attr('stroke-linejoin', 'round');
+
+    const tip = tooltip(el);
+    const focus = svg.append('circle').attr('r', 4).attr('fill', series).attr('stroke', 'var(--color-panel)')
+      .attr('stroke-width', 2).attr('visibility', 'hidden');
+    svg.append('rect').attr('x', m.left).attr('y', m.top).attr('width', W - m.left - m.right).attr('height', H - m.top - m.bottom)
+      .attr('fill', 'transparent')
+      .on('pointermove', (event) => {
+        const [mx] = d3.pointer(event);
+        const p = points[Math.max(0, Math.min(126, Math.round(x.invert(mx)) - 1))];
+        focus.attr('cx', x(p.velocity)).attr('cy', y(p.duty)).attr('visibility', 'visible');
+        tip.show(`Velocity ${p.velocity}`, [['', 'Duty', `${p.duty}%`], ['', 'Plays about', `${f1(levelAt(p.duty))} dB`]],
+          x(p.velocity), y(p.duty));
+      })
+      .on('pointerleave', () => { tip.hide(); focus.attr('visibility', 'hidden'); });
+  };
+
+  // ---- velocity 64 ----
+  const drawV64 = () => {
+    const el = document.getElementById('v64');
+    document.getElementById('ln-own').style.borderTopColor = dash.colors[0];
+    document.getElementById('ln-even').style.borderTopColor = dash.colors[1];
+    if (!prepare(el, status(['keys']))) return;
+    const smooth = [...dash.data('keys').data].sort((a, b) => a.key - b.key);
+    const W = el.clientWidth, H = 240;
+    const svg = d3.select(el).append('svg').attr('width', '100%').attr('viewBox', `0 0 ${W} ${H}`)
+      .attr('role', 'img').attr('aria-label', 'Loudness at velocity 64 for every key, own range and smoothed');
+    const all = smooth.flatMap((s) => [Number(s.v64_own_db), Number(s.v64_mapped_db)]);
+    const y = d3.scaleLinear([d3.min(all) - 2, d3.max(all) + 2], [H - 24, 8]).nice();
+    const yTicks = y.ticks(5);
+    const m = { top: 8, right: 4, bottom: 24, left: d3.max(yTicks, (t) => textWidth(svg, `${t} dB`)) + 8 };
+    const x = d3.scaleBand(d3.range(0, 88), [m.left, W - m.right]);
+    yTicks.forEach((t) => {
+      svg.append('line').attr('x1', m.left).attr('x2', W - m.right).attr('y1', y(t)).attr('y2', y(t))
+        .attr('stroke', 'var(--cds-chart-grid)').attr('stroke-width', 1);
+      svg.append('text').attr('class', 'pc-tick').attr('text-anchor', 'end').attr('dominant-baseline', 'middle')
+        .attr('x', m.left - 6).attr('y', y(t)).text(`${t} dB`);
+    });
+    const center = (s) => x(Number(s.key)) + x.bandwidth() / 2;
+    [['v64_own_db', dash.colors[0]], ['v64_mapped_db', dash.colors[1]]].forEach(([field, color]) => {
+      svg.append('path').attr('d', d3.line().x(center).y((s) => y(Number(s[field])))(smooth)).attr('fill', 'none')
+        .attr('stroke', color).attr('stroke-width', 2).attr('stroke-linejoin', 'round').attr('stroke-linecap', 'round');
+    });
+    keyAxis(svg, x, smooth, H - m.bottom);
+
+    const tip = tooltip(el);
+    const rule = svg.append('line').attr('y1', m.top).attr('y2', H - m.bottom).attr('stroke', 'var(--cds-chart-reference)')
+      .attr('stroke-width', 1).attr('visibility', 'hidden');
+    const dots = [dash.colors[0], dash.colors[1]].map((c) => svg.append('circle').attr('r', 4).attr('fill', c)
+      .attr('stroke', 'var(--color-panel)').attr('stroke-width', 2).attr('visibility', 'hidden'));
+    svg.append('rect').attr('x', m.left).attr('y', m.top).attr('width', W - m.left - m.right).attr('height', H - m.top - m.bottom)
+      .attr('fill', 'transparent').style('cursor', 'pointer')
+      .on('pointermove', (event) => {
+        const [mx, my] = d3.pointer(event);
+        const key = Math.floor((mx - m.left) / x.step());
+        const s = smooth.find((r) => Number(r.key) === key);
+        if (!s) { tip.hide(); return; }
+        rule.attr('x1', center(s)).attr('x2', center(s)).attr('visibility', 'visible');
+        dots[0].attr('cx', center(s)).attr('cy', y(Number(s.v64_own_db))).attr('visibility', 'visible');
+        dots[1].attr('cx', center(s)).attr('cy', y(Number(s.v64_mapped_db))).attr('visibility', 'visible');
+        tip.show(`Key ${key} · ${s.note} at velocity 64`, [
+          [dash.colors[0], 'Own range', `${f1(s.v64_own_db)} dB`],
+          [dash.colors[1], `Velocity table (${s.v64_duty}%)`, `${f1(s.v64_mapped_db)} dB`],
+        ], mx, my);
+      })
+      .on('pointerleave', () => { tip.hide(); rule.attr('visibility', 'hidden'); dots.forEach((d) => d.attr('visibility', 'hidden')); })
+      .on('click', (event) => {
+        const key = Math.floor((d3.pointer(event)[0] - m.left) / x.step());
+        if (smooth.some((s) => Number(s.key) === key)) pickKey(key);
+      });
+  };
+
+  // ---- table ----
+  const table = document.querySelector('#keys-table table');
+  const body = table.querySelector('tbody');
+  let sort = { field: 'key', dir: 1 };
+  table.querySelectorAll('th button').forEach((btn) => btn.addEventListener('click', () => {
+    const field = btn.dataset.sort;
+    sort = { field, dir: sort.field === field ? -sort.dir : 1 };
+    drawTable();
+  }));
+  body.addEventListener('click', (event) => {
+    const row = event.target.closest('tr[data-key]');
+    if (row) pickKey(row.dataset.key);
+  });
+  body.addEventListener('keydown', (event) => {
+    const row = event.target.closest('tr[data-key]');
+    if (row && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); pickKey(row.dataset.key); }
+  });
+  const drawTable = () => {
+    table.querySelectorAll('th').forEach((th) => {
+      const field = th.querySelector('button').dataset.sort;
+      th.setAttribute('aria-sort', field === sort.field ? (sort.dir > 0 ? 'ascending' : 'descending') : 'none');
+    });
+    if (dash.data('keys').status !== 'ok') { body.replaceChildren(); return; }
+    const keys = dash.data('keys').data;
+    const picked = pickedKey(keys);
+    const numeric = sort.field !== 'note' && sort.field !== 'cut_short';
+    const rows = [...keys].sort((a, b) => sort.dir * (numeric ? a[sort.field] - b[sort.field]
+      : String(a[sort.field]).localeCompare(String(b[sort.field]))));
+    const cell = (text, wide) => {
+      const td = document.createElement('td');
+      td.textContent = text;
+      if (wide) td.className = 'pc-wide';
+      return td;
+    };
+    body.replaceChildren(...rows.map((k) => {
+      const tr = document.createElement('tr');
+      tr.dataset.key = k.key;
+      tr.tabIndex = 0;
+      if (Number(k.key) === picked) tr.className = 'pc-picked';
+      tr.append(cell(String(k.key)), cell(k.note), cell(`${k.threshold_duty}%`, true), cell(`${k.min_duty}%`), cell(`${k.max_duty}%`),
+        cell(f1(k.min_db), true), cell(f1(k.loud_db), true), cell(`${f1(k.range_db)} dB`), cell(k.cut_short || '', true));
+      return tr;
+    }));
+  };
+
+  // ---- figures ----
+  const fill = (id) => {
+    const d = dash.data(id);
+    const row = d.status === 'ok' && d.data && d.data[0];
+    document.querySelectorAll(`[data-source="${id}"][data-field]`).forEach((el) => {
+      el.textContent = row ? String(row[el.dataset.field]) : '—';
+      el.classList.toggle('dash-skeleton', d.status === 'loading');
+    });
+  };
+
+  dash.onData(() => {
+    fill('summary');
+    fill('evenness');
+    drawHeatmap();
+    drawCurve();
+    drawVelocity();
+    drawRanges();
+    drawV64();
+    drawTable();
+  });
+})();
+</script>
+
+</body>
+</html>

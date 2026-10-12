@@ -57,6 +57,11 @@ void SerialCommands::handleLine()
     Serial.println(piano->stop() == PlaybackResult::Ok ? "#OK" : "#ERR queue full");
     return;
   }
+  if (command == "RESET")
+  {
+    Serial.println(piano->resetDrivers() == PlaybackResult::Ok ? "#OK" : "#ERR queue full");
+    return;
+  }
 
   switch (piano->submitDriverCommand(command))
   {

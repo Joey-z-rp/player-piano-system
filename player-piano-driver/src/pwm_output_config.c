@@ -9,36 +9,38 @@ TIM_HandleTypeDef htim4;
 // PWM configuration for all 15 outputs at 20kHz
 static const PWM_Config_t pwm_configs[] = {
     // TIM3 channels (PA6, PA7, PB0, PB1)
-    {.htim = &htim3, .channel = PWM_PB1_CHANNEL, .frequency = 20000, .resolution = 100, .duty_cycle = 0},
-    {.htim = &htim3, .channel = PWM_PB0_CHANNEL, .frequency = 20000, .resolution = 100, .duty_cycle = 0},
-    {.htim = &htim3, .channel = PWM_PA7_CHANNEL, .frequency = 20000, .resolution = 100, .duty_cycle = 0},
-    {.htim = &htim3, .channel = PWM_PA6_CHANNEL, .frequency = 20000, .resolution = 100, .duty_cycle = 0},
+    {.htim = &htim3, .channel = PWM_PB1_CHANNEL, .frequency = 20000, .duty_cycle = 0},
+    {.htim = &htim3, .channel = PWM_PB0_CHANNEL, .frequency = 20000, .duty_cycle = 0},
+    {.htim = &htim3, .channel = PWM_PA7_CHANNEL, .frequency = 20000, .duty_cycle = 0},
+    {.htim = &htim3, .channel = PWM_PA6_CHANNEL, .frequency = 20000, .duty_cycle = 0},
 
     // TIM2 channels (PA0, PA1, PA2, PA3)
-    {.htim = &htim2, .channel = PWM_PA3_CHANNEL, .frequency = 20000, .resolution = 100, .duty_cycle = 0},
-    {.htim = &htim2, .channel = PWM_PA2_CHANNEL, .frequency = 20000, .resolution = 100, .duty_cycle = 0},
-    {.htim = &htim2, .channel = PWM_PA1_CHANNEL, .frequency = 20000, .resolution = 100, .duty_cycle = 0},
-    {.htim = &htim2, .channel = PWM_PA0_CHANNEL, .frequency = 20000, .resolution = 100, .duty_cycle = 0},
+    {.htim = &htim2, .channel = PWM_PA3_CHANNEL, .frequency = 20000, .duty_cycle = 0},
+    {.htim = &htim2, .channel = PWM_PA2_CHANNEL, .frequency = 20000, .duty_cycle = 0},
+    {.htim = &htim2, .channel = PWM_PA1_CHANNEL, .frequency = 20000, .duty_cycle = 0},
+    {.htim = &htim2, .channel = PWM_PA0_CHANNEL, .frequency = 20000, .duty_cycle = 0},
 
     // TIM4 channels (PB6, PB7, PB8, PB9)
-    {.htim = &htim4, .channel = PWM_PB9_CHANNEL, .frequency = 20000, .resolution = 100, .duty_cycle = 0},
-    {.htim = &htim4, .channel = PWM_PB8_CHANNEL, .frequency = 20000, .resolution = 100, .duty_cycle = 0},
-    {.htim = &htim4, .channel = PWM_PB7_CHANNEL, .frequency = 20000, .resolution = 100, .duty_cycle = 0},
-    {.htim = &htim4, .channel = PWM_PB6_CHANNEL, .frequency = 20000, .resolution = 100, .duty_cycle = 0},
+    {.htim = &htim4, .channel = PWM_PB9_CHANNEL, .frequency = 20000, .duty_cycle = 0},
+    {.htim = &htim4, .channel = PWM_PB8_CHANNEL, .frequency = 20000, .duty_cycle = 0},
+    {.htim = &htim4, .channel = PWM_PB7_CHANNEL, .frequency = 20000, .duty_cycle = 0},
+    {.htim = &htim4, .channel = PWM_PB6_CHANNEL, .frequency = 20000, .duty_cycle = 0},
 
     // TIM1 channels (PA8, PA9, PA10)
-    {.htim = &htim1, .channel = PWM_PA10_CHANNEL, .frequency = 20000, .resolution = 100, .duty_cycle = 0},
-    {.htim = &htim1, .channel = PWM_PA9_CHANNEL, .frequency = 20000, .resolution = 100, .duty_cycle = 0},
-    {.htim = &htim1, .channel = PWM_PA8_CHANNEL, .frequency = 20000, .resolution = 100, .duty_cycle = 0}};
+    {.htim = &htim1, .channel = PWM_PA10_CHANNEL, .frequency = 20000, .duty_cycle = 0},
+    {.htim = &htim1, .channel = PWM_PA9_CHANNEL, .frequency = 20000, .duty_cycle = 0},
+    {.htim = &htim1, .channel = PWM_PA8_CHANNEL, .frequency = 20000, .duty_cycle = 0}};
 
 _Static_assert((sizeof(pwm_configs) / sizeof(pwm_configs[0])) == PWM_NUM_CHANNELS, "PWM channel count mismatch");
 
-// Helper function to configure a timer for PWM
-static void PWM_ConfigureTimer(TIM_HandleTypeDef *htim, uint32_t frequency, uint32_t resolution)
+// Helper function to configure a timer for PWM. The timer counts at the core
+// clock with no prescaler, so each cycle has as many steps as the clock allows:
+// 400 at 8 MHz and 20 kHz, which sets duty to 0.25% steps.
+static void PWM_ConfigureTimer(TIM_HandleTypeDef *htim, uint32_t frequency)
 {
-  htim->Init.Prescaler = (SystemCoreClock / (frequency * resolution)) - 1;
+  htim->Init.Prescaler = 0;
   htim->Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim->Init.Period = resolution - 1;
+  htim->Init.Period = (SystemCoreClock / frequency) - 1;
   htim->Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim->Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
 }
@@ -57,7 +59,7 @@ static void PWM_ConfigureChannels(TIM_HandleTypeDef *htim, const PWM_Config_t *c
   for (uint8_t i = 0; i < count; i++)
   {
     const PWM_Config_t *config = &configs[start_idx + i];
-    sConfigOC.Pulse = (config->duty_cycle * config->resolution) / 100;
+    sConfigOC.Pulse = (config->duty_cycle * (htim->Init.Period + 1)) / PWM_DUTY_FULL;
 
     if (HAL_TIM_PWM_ConfigChannel(htim, &sConfigOC, config->channel) != HAL_OK)
     {
@@ -96,7 +98,7 @@ void PWM_Init(void)
 
   // Configure TIM2
   htim2.Instance = TIM2;
-  PWM_ConfigureTimer(&htim2, pwm_configs[0].frequency, pwm_configs[0].resolution);
+  PWM_ConfigureTimer(&htim2, pwm_configs[0].frequency);
   if (HAL_TIM_PWM_Init(&htim2) != HAL_OK)
   {
     // Error handling
@@ -105,7 +107,7 @@ void PWM_Init(void)
 
   // Configure TIM3
   htim3.Instance = TIM3;
-  PWM_ConfigureTimer(&htim3, pwm_configs[4].frequency, pwm_configs[4].resolution);
+  PWM_ConfigureTimer(&htim3, pwm_configs[4].frequency);
   if (HAL_TIM_PWM_Init(&htim3) != HAL_OK)
   {
     // Error handling
@@ -114,7 +116,7 @@ void PWM_Init(void)
 
   // Configure TIM4
   htim4.Instance = TIM4;
-  PWM_ConfigureTimer(&htim4, pwm_configs[8].frequency, pwm_configs[8].resolution);
+  PWM_ConfigureTimer(&htim4, pwm_configs[8].frequency);
   if (HAL_TIM_PWM_Init(&htim4) != HAL_OK)
   {
     // Error handling
@@ -123,7 +125,7 @@ void PWM_Init(void)
 
   // Configure TIM1
   htim1.Instance = TIM1;
-  PWM_ConfigureTimer(&htim1, pwm_configs[12].frequency, pwm_configs[12].resolution);
+  PWM_ConfigureTimer(&htim1, pwm_configs[12].frequency);
   if (HAL_TIM_PWM_Init(&htim1) != HAL_OK)
   {
     // Error handling
@@ -137,12 +139,12 @@ void PWM_SetDutyCycle(uint8_t channel_index, uint32_t duty_cycle)
   if (channel_index >= PWM_NUM_CHANNELS)
     return;
 
-  if (duty_cycle > 100)
-    duty_cycle = 100;
+  if (duty_cycle > PWM_DUTY_FULL)
+    duty_cycle = PWM_DUTY_FULL;
 
   // Get the configuration for this channel index
   const PWM_Config_t *config = &pwm_configs[channel_index];
-  uint32_t pulse = (duty_cycle * config->resolution) / 100;
+  uint32_t pulse = (duty_cycle * (__HAL_TIM_GET_AUTORELOAD(config->htim) + 1)) / PWM_DUTY_FULL;
   __HAL_TIM_SET_COMPARE(config->htim, config->channel, pulse);
 }
 

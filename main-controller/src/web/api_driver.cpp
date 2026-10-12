@@ -29,4 +29,35 @@ void registerDriverRoutes(AsyncWebServer &server, PianoController &piano)
       });
   commandHandler->setMethod(HTTP_POST);
   server.addHandler(commandHandler);
+
+  AsyncCallbackJsonWebHandler *pedalHandler = new AsyncCallbackJsonWebHandler(
+      "/api/pedal",
+      [&piano](AsyncWebServerRequest *request, JsonVariant &json) {
+        if (!json["down"].is<bool>())
+        {
+          sendError(request, 400, "\"down\" must be true or false");
+          return;
+        }
+        if (piano.setPedal(json["down"].as<bool>()) != PlaybackResult::Ok)
+        {
+          sendError(request, 503, "command queue full");
+          return;
+        }
+        JsonDocument doc;
+        doc["ok"] = true;
+        sendJson(request, 202, doc);
+      });
+  pedalHandler->setMethod(HTTP_POST);
+  server.addHandler(pedalHandler);
+
+  server.on("/api/driver/reset", HTTP_POST, [&piano](AsyncWebServerRequest *request) {
+    if (piano.resetDrivers() != PlaybackResult::Ok)
+    {
+      sendError(request, 503, "command queue full");
+      return;
+    }
+    JsonDocument doc;
+    doc["ok"] = true;
+    sendJson(request, 202, doc);
+  });
 }

@@ -10,13 +10,11 @@
 #include "app/piano/piano_roll.h"
 
 class Rs485Module;
+class VelocityTable;
 
 static const size_t DRIVER_COMMAND_MAX_LENGTH = 32;
 static const size_t DRIVER_COMMAND_QUEUE_LENGTH = 32;
 
-// Velocity 1-127 maps linearly onto this duty range.
-static const uint8_t KEY_MIN_DUTY = 40;
-static const uint8_t KEY_MAX_DUTY = 80;
 
 // The sustain pedal is pushed by two solenoids, driven together. Both use
 // P commands (duty:strike ms:follow-up duty:follow-up ms:hold duty):
@@ -24,6 +22,12 @@ static const uint8_t KEY_MAX_DUTY = 80;
 static const uint8_t SUSTAIN_PEDAL_CHANNELS[] = {88, 89};
 static const char SUSTAIN_PEDAL_PRESS[] = "100:30:100:30:55";
 static const char SUSTAIN_PEDAL_RELEASE[] = "40:40:30:40:0";
+
+// Before each song, and on request, the driver boards are restarted and given
+// this long to come back, so a driver stuck in a bad state can't carry it
+// into a song.
+static const char DRIVER_RESET_COMMAND[] = "RESET:ALL";
+static const uint32_t DRIVER_RESET_WAIT_MS = 100;
 
 enum class SubmitResult
 {
@@ -60,13 +64,18 @@ class PianoController
 public:
   PianoController();
 
-  bool init(Rs485Module *rs485);
+  // Key presses take their duty from velocityTable; it must outlive the controller.
+  bool init(Rs485Module *rs485, const VelocityTable *velocityTable);
 
   // Safe to call from any task.
   SubmitResult submitDriverCommand(const String &command);
   PlaybackResult loadRoll(std::shared_ptr<const PianoRoll> roll);
   PlaybackResult play();
   PlaybackResult stop();
+  // Stops any song and restarts every driver board, which lets every key go.
+  PlaybackResult resetDrivers();
+  // Presses or gradually releases the sustain pedal, as a song does.
+  PlaybackResult setPedal(bool down);
   PlaybackStatus status() const;
   size_t pendingCommands() const;
 
@@ -77,7 +86,10 @@ private:
   {
     DriverCommand,
     Play,
-    Stop
+    Stop,
+    ResetDrivers,
+    PedalDown,
+    PedalUp
   };
 
   struct Message
@@ -95,10 +107,13 @@ private:
   void finishPlayback();
   void sendRollEvent(const RollEvent &event);
   void releaseAll();
+  void restartDrivers();
   void sendPedal(const char *params);
   bool send(const char *command);
+  void sendPress(uint8_t key, uint16_t duty);
 
   Rs485Module *rs485;
+  const VelocityTable *velocityTable;
   QueueHandle_t messageQueue;
 
   mutable std::mutex rollMutex;
@@ -110,7 +125,6 @@ private:
   std::shared_ptr<const PianoRoll> playingRoll;
   size_t nextEvent;
   int64_t startUs;
-  bool sustainHeld;
 };
 
 #endif // PIANO_CONTROLLER_H

@@ -10,9 +10,12 @@ typedef struct
   TIM_HandleTypeDef *htim; // Pointer to timer handle
   uint32_t channel;        // Timer channel
   uint32_t frequency;      // PWM frequency in Hz
-  uint32_t resolution;     // PWM resolution (period)
-  uint32_t duty_cycle;     // Duty cycle percentage (0-100)
+  uint32_t duty_cycle;     // Starting duty, in hundredths of a percent (0-PWM_DUTY_FULL)
 } PWM_Config_t;
+
+// Duty cycles are in hundredths of a percent: 10000 is fully on. The timers
+// realise them in 0.25% steps (see PWM_ConfigureTimer).
+#define PWM_DUTY_FULL 10000
 
 #define PWM_NUM_CHANNELS 15
 
@@ -42,7 +45,7 @@ typedef struct
 
 // Function declarations
 void PWM_Init(void);
-void PWM_SetDutyCycle(uint8_t channel_index, uint32_t duty_cycle); // 0=PB1, 1=PB0, 2=PA7, 3=PA6, 4=PA3, 5=PA2, 6=PA1, 7=PA0, 8=PB9, 9=PB8, 10=PB7, 11=PB6, 12=PA10, 13=PA9, 14=PA8
+void PWM_SetDutyCycle(uint8_t channel_index, uint32_t duty_cycle); // duty in hundredths of a percent; 0=PB1, 1=PB0, 2=PA7, 3=PA6, 4=PA3, 5=PA2, 6=PA1, 7=PA0, 8=PB9, 9=PB8, 10=PB7, 11=PB6, 12=PA10, 13=PA9, 14=PA8
 void PWM_Start(void);
 void PWM_Stop(void);
 

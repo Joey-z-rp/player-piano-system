@@ -5,7 +5,7 @@
 #include "key_driver.h"
 
 // Command queue configuration
-#define COMMAND_QUEUE_SIZE 32
+#define COMMAND_QUEUE_SIZE 64 // holds one less: a slot stays empty to tell full from empty
 
 // Command types
 typedef enum
@@ -19,20 +19,22 @@ typedef struct
 {
   CommandType_t type;
   uint8_t channel;              // Piano key (0-87) while parsing; local PWM index once queued
-  uint8_t duty_cycle;           // Initial duty cycle (0-100)
+  // Duty cycles in hundredths of a percent (0-PWM_DUTY_FULL).
+  uint16_t duty_cycle;          // Initial duty cycle
   uint16_t initial_strike_time; // Initial strike time in ms (0 = use default)
-  uint8_t followup_duty_cycle;  // Follow-up duty cycle (0-100, 0 = no follow-up)
+  uint16_t followup_duty_cycle; // Follow-up duty cycle (0 = no follow-up)
   uint16_t followup_time;       // Follow-up time in ms (0 = no follow-up)
-  uint8_t hold_duty_cycle;      // Hold duty (0-100, 255 = omitted / use default)
+  uint16_t hold_duty_cycle;     // Hold duty (DUTY_OMITTED = use default)
 } ParsedCommand_t;
 
-// Command queue structure
+// Commands pass from the serial interrupt (Enqueue, which only moves tail) to
+// the main loop (Dequeue, which only moves head). Neither side writes the
+// other's index, so the interrupt can't corrupt the queue mid-update.
 typedef struct
 {
   ParsedCommand_t commands[COMMAND_QUEUE_SIZE];
-  uint8_t head;
-  uint8_t tail;
-  uint8_t count;
+  volatile uint8_t head;
+  volatile uint8_t tail;
 } CommandQueue_t;
 
 // Function prototypes

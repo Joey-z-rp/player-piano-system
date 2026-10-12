@@ -19,39 +19,41 @@ void KeyDriver_Init(KeyDriverModule_t *key_driver)
     key_driver->keys[i].followup_start_time = 0;
     key_driver->keys[i].initial_duty_cycle = 0;
     key_driver->keys[i].followup_duty_cycle = 0;
-    key_driver->keys[i].hold_duty_cycle = HOLD_DUTY_CYCLE;
+    key_driver->keys[i].hold_duty_cycle = HOLD_DUTY;
     key_driver->keys[i].initial_strike_time_ms = INITIAL_STRIKE_TIME_MS;
     key_driver->keys[i].followup_time_ms = 0;
   }
 
   // Set global hold duty cycle
-  key_driver->hold_duty_cycle = HOLD_DUTY_CYCLE;
+  key_driver->hold_duty_cycle = HOLD_DUTY;
 }
 
 // Press a key with specified duty cycle and optional timing parameters
-void KeyDriver_PressKey(KeyDriverModule_t *key_driver, uint8_t key, uint8_t duty_cycle, uint16_t initial_strike_time, uint8_t followup_duty_cycle, uint16_t followup_time, uint8_t hold_duty_cycle)
+void KeyDriver_PressKey(KeyDriverModule_t *key_driver, uint8_t key, uint16_t duty_cycle, uint16_t initial_strike_time, uint16_t followup_duty_cycle, uint16_t followup_time, uint16_t hold_duty_cycle)
 {
   if (key_driver == NULL || key >= NUM_KEYS)
   {
     return;
   }
 
-  // Clamp duty cycle to valid range (0-100)
-  if (duty_cycle > 100)
+  // Clamp duty cycles to 0-100%
+  if (duty_cycle > PWM_DUTY_FULL)
   {
-    duty_cycle = 100;
+    duty_cycle = PWM_DUTY_FULL;
+  }
+  if (followup_duty_cycle > PWM_DUTY_FULL)
+  {
+    followup_duty_cycle = PWM_DUTY_FULL;
   }
 
-  // Clamp follow-up duty cycle to valid range (0-100)
-  if (followup_duty_cycle > 100)
+  // 0-100% is explicit (including 0%); DUTY_OMITTED uses the default hold.
+  if (hold_duty_cycle == DUTY_OMITTED)
   {
-    followup_duty_cycle = 100;
+    hold_duty_cycle = HOLD_DUTY;
   }
-
-  // 0-100 is explicit (including 0%). Values above 100 mean "field omitted".
-  if (hold_duty_cycle > 100)
+  else if (hold_duty_cycle > PWM_DUTY_FULL)
   {
-    hold_duty_cycle = HOLD_DUTY_CYCLE;
+    hold_duty_cycle = PWM_DUTY_FULL;
   }
 
   // Set key state to initial strike

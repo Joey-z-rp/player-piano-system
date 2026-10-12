@@ -1,4 +1,5 @@
 #include "app/piano/piano_controller.h"
+#include "app/piano/velocity_table.h"
 #include "rs485.h"
 #include <esp_timer.h>
 #include <freertos/task.h>
@@ -7,24 +8,16 @@ static const uint32_t PLAYER_TASK_STACK = 4096;
 static const UBaseType_t PLAYER_TASK_PRIORITY = 3; // above loop()
 static const BaseType_t PLAYER_TASK_CORE = 1;      // Wi-Fi runs on core 0
 
-static uint8_t velocityToDuty(uint8_t velocity)
-{
-  if (velocity < 1)
-  {
-    velocity = 1;
-  }
-  return KEY_MIN_DUTY + (uint32_t)(velocity - 1) * (KEY_MAX_DUTY - KEY_MIN_DUTY) / 126;
-}
-
 PianoController::PianoController()
-    : rs485(nullptr), messageQueue(nullptr), state(PlaybackState::Idle), playStartMs(0),
-      nextEvent(0), startUs(0), sustainHeld(false)
+    : rs485(nullptr), velocityTable(nullptr), messageQueue(nullptr), state(PlaybackState::Idle), playStartMs(0),
+      nextEvent(0), startUs(0)
 {
 }
 
-bool PianoController::init(Rs485Module *rs485)
+bool PianoController::init(Rs485Module *rs485, const VelocityTable *velocityTable)
 {
   this->rs485 = rs485;
+  this->velocityTable = velocityTable;
   messageQueue = xQueueCreate(DRIVER_COMMAND_QUEUE_LENGTH, sizeof(Message));
   if (messageQueue == nullptr)
   {
@@ -82,6 +75,22 @@ PlaybackResult PianoController::stop()
 {
   Message message;
   message.type = MessageType::Stop;
+  message.text[0] = '\0';
+  return post(message) ? PlaybackResult::Ok : PlaybackResult::QueueFull;
+}
+
+PlaybackResult PianoController::resetDrivers()
+{
+  Message message;
+  message.type = MessageType::ResetDrivers;
+  message.text[0] = '\0';
+  return post(message) ? PlaybackResult::Ok : PlaybackResult::QueueFull;
+}
+
+PlaybackResult PianoController::setPedal(bool down)
+{
+  Message message;
+  message.type = down ? MessageType::PedalDown : MessageType::PedalUp;
   message.text[0] = '\0';
   return post(message) ? PlaybackResult::Ok : PlaybackResult::QueueFull;
 }
@@ -163,11 +172,34 @@ void PianoController::handleMessage(const Message &message)
       releaseAll(); // also clears keys left on by manual commands
     }
     break;
+  case MessageType::ResetDrivers:
+    if (state == PlaybackState::Playing)
+    {
+      finishPlayback();
+    }
+    restartDrivers();
+    break;
+  case MessageType::PedalDown:
+    sendPedal(SUSTAIN_PEDAL_PRESS);
+    break;
+  case MessageType::PedalUp:
+    sendPedal(SUSTAIN_PEDAL_RELEASE);
+    break;
   }
+}
+
+// The drivers come back with every output off.
+void PianoController::restartDrivers()
+{
+  send(DRIVER_RESET_COMMAND);
+  vTaskDelay(pdMS_TO_TICKS(DRIVER_RESET_WAIT_MS));
+  Serial.println("Drivers restarted");
 }
 
 void PianoController::startPlayback()
 {
+  restartDrivers();
+
   // Take the roll and mark it playing under one lock, so loadRoll() can't
   // swap in a new roll between the two.
   {
@@ -216,8 +248,7 @@ void PianoController::sendRollEvent(const RollEvent &event)
   switch (event.type)
   {
   case RollEventType::KeyPress:
-    snprintf(command, sizeof(command), "P:%u:%u", event.key, velocityToDuty(event.velocity));
-    send(command);
+    sendPress(event.key, velocityTable->duty(event.key, event.velocity));
     break;
   case RollEventType::KeyRelease:
     snprintf(command, sizeof(command), "R:%u:0", event.key);
@@ -225,11 +256,9 @@ void PianoController::sendRollEvent(const RollEvent &event)
     break;
   case RollEventType::SustainOn:
     sendPedal(SUSTAIN_PEDAL_PRESS);
-    sustainHeld = true;
     break;
   case RollEventType::SustainOff:
     sendPedal(SUSTAIN_PEDAL_RELEASE);
-    sustainHeld = false;
     break;
   }
 }
@@ -242,19 +271,7 @@ void PianoController::releaseAll()
     snprintf(command, sizeof(command), "R:%u:0", key);
     send(command);
   }
-  if (sustainHeld)
-  {
-    sendPedal(SUSTAIN_PEDAL_RELEASE);
-    sustainHeld = false;
-  }
-  else
-  {
-    for (uint8_t channel : SUSTAIN_PEDAL_CHANNELS)
-    {
-      snprintf(command, sizeof(command), "R:%u:0", channel);
-      send(command);
-    }
-  }
+  sendPedal(SUSTAIN_PEDAL_RELEASE);
 }
 
 void PianoController::sendPedal(const char *params)
@@ -277,6 +294,26 @@ bool PianoController::send(const char *command)
   return true;
 }
 
+// The driver takes duty in percent with up to two decimals: 3225 -> "32.25".
+void PianoController::sendPress(uint8_t key, uint16_t duty)
+{
+  char command[DRIVER_COMMAND_MAX_LENGTH + 1];
+  unsigned whole = duty / 100, hundredths = duty % 100;
+  if (hundredths == 0)
+  {
+    snprintf(command, sizeof(command), "P:%u:%u", key, whole);
+  }
+  else if (hundredths % 10 == 0)
+  {
+    snprintf(command, sizeof(command), "P:%u:%u.%u", key, whole, hundredths / 10);
+  }
+  else
+  {
+    snprintf(command, sizeof(command), "P:%u:%u.%02u", key, whole, hundredths);
+  }
+  send(command);
+}
+
 bool PianoController::isDriverCommand(const String &command)
 {
   if (command.length() < 3 || command.length() > DRIVER_COMMAND_MAX_LENGTH)
@@ -290,7 +327,7 @@ bool PianoController::isDriverCommand(const String &command)
   for (unsigned int i = 2; i < command.length(); i++)
   {
     char c = command.charAt(i);
-    if (!isdigit(c) && c != ':')
+    if (!isdigit(c) && c != ':' && c != '.')
     {
       return false;
     }

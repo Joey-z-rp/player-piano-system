@@ -89,6 +89,23 @@ void USART3_IRQHandler(void)
 }
 
 /**
+ * @brief UART error callback. An overrun (a byte arriving before the last
+ * was read) makes the HAL stop receiving; restart it, dropping the partial
+ * message, or the driver would ignore every command until reset. Errors that
+ * leave reception running (noise, framing) need nothing: the garbled line
+ * fails to parse.
+ */
+void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
+{
+  if (huart->Instance == RS485_UART_INSTANCE && huart->RxState == HAL_UART_STATE_READY)
+  {
+    __HAL_UART_CLEAR_OREFLAG(huart);
+    rx_index = 0;
+    HAL_UART_Receive_IT(&huart3, (uint8_t *)rx_buffer, 1);
+  }
+}
+
+/**
  * @brief UART receive complete callback
  */
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
