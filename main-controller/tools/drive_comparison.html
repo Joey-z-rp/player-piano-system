@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Drive comparison</title>
+<!-- Page template for `compare_drives.py compare`, which replaces the data
+     placeholder near the end. -->
+<style>
+  :root {
+    color-scheme: light;
+    --bg: #f6f6f3; --panel: #fcfcfb; --fg: #0b0b0b; --muted: #5f5e5a; --line: #e1e0d9;
+    --grid: #ecebe5; --popover: #ffffff;
+    --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      color-scheme: dark;
+      --bg: #0d0d0d; --panel: #1a1a19; --fg: #ffffff; --muted: #a9a89f; --line: #2c2c2a;
+      --grid: #262624; --popover: #242422;
+      --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500;
+    }
+  }
+  [hidden] { display: none !important; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 76rem; margin-inline: auto; padding: 24px clamp(16px, 4vw, 40px) 48px; display: grid; gap: 20px; }
+  h1 { margin: 0; font: 400 30px/1.2 Georgia, "Times New Roman", serif; }
+  h2 { margin: 0; font-size: 16px; font-weight: 600; }
+  p { margin: 0; color: var(--muted); max-width: 72ch; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 20px; display: grid; gap: 10px; min-width: 0; }
+  .charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 20rem), 1fr)); gap: 16px; }
+  .plot { position: relative; min-height: 260px; }
+  .plot svg { display: block; overflow: visible; }
+  .tick { font-size: 12px; fill: var(--muted); font-variant-numeric: tabular-nums; }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; color: var(--muted); }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .swatch { width: 14px; height: 0; border-top: 2px solid; }
+  .tip { position: absolute; pointer-events: none; z-index: 2; white-space: nowrap; font-size: 12px; background: var(--popover);
+    border: 1px solid var(--line); border-radius: 8px; padding: 4px 8px; box-shadow: 0 4px 16px rgba(0, 0, 0, .12); }
+  .tip-head { color: var(--muted); }
+  .table-wrap { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+  th, td { padding: 4px 10px; border-top: 1px solid var(--line); text-align: right; white-space: nowrap; }
+  th { font-size: 12px; color: var(--muted); font-weight: 600; border-top: 0; }
+  th:nth-child(-n+2), td:nth-child(-n+2) { text-align: left; }
+  td .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+</style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Drive comparison</h1>
+    <p id="generated"></p>
+  </header>
+
+  <section class="card">
+    <h2>Loudness across each drive's usable range</h2>
+    <p>Each line runs from where the key first plays reliably (left) to where more drive stops making it louder (right).
+      A straight line means equal steps of the control give equal steps of loudness; a curve that shoots up on the left
+      means the soft end is bunched into a small part of the range.</p>
+    <div class="legend" id="legend"></div>
+    <div class="charts" id="charts"></div>
+  </section>
+
+  <section class="card">
+    <h2>Scorecard</h2>
+    <p id="explain"></p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Drive</th><th>Key</th><th>Plays from</th><th>Up to</th><th>Range</th><th>Softest</th>
+          <th>First tenth</th><th>Spread</th><th>Bounce</th><th>Decay</th></tr></thead>
+        <tbody id="table"></tbody>
+      </table>
+    </div>
+  </section>
+</main>
+
+<script>window.DRIVES = __DRIVE_DATA__;</script>
+<script>
+(() => {
+  const data = window.DRIVES;
+  const families = [...new Set(data.results.map((r) => r.family))];
+  const color = (family) => `var(--s${families.indexOf(family) % 4 + 1})`;
+  const f1 = d3.format('.1f'), pct = d3.format('.0%');
+
+  document.getElementById('generated').textContent = `Generated ${data.generated} from ${data.source}`;
+  document.getElementById('explain').textContent =
+    'Range: softest reliable to loudest. First tenth: share of the range reached in the first tenth of the control '
+    + '(10% is perfectly even; higher means bunched at the soft end). Spread: typical strike-to-strike difference at one '
+    + 'setting. Bounce: strikes in the upper half of the range where the hammer struck twice. Decay: dB lost '
+    + `${data.decay_ms} ms after the attack while the key is held (higher means damped sooner).`;
+
+  document.getElementById('legend').replaceChildren(...families.map((family) => {
+    const item = document.createElement('span');
+    const swatch = document.createElement('span');
+    swatch.className = 'swatch';
+    swatch.style.borderTopColor = color(family);
+    item.append(swatch, family);
+    return item;
+  }));
+
+  const keys = [...new Set(data.results.map((r) => r.key))].sort((a, b) => a - b);
+  const charts = document.getElementById('charts');
+
+  const draw = () => {
+    charts.replaceChildren();
+    for (const key of keys) {
+      const rows = data.results.filter((r) => r.key === key);
+      const box = document.createElement('div');
+      box.className = 'plot';
+      const title = document.createElement('h2');
+      title.textContent = `Key ${key} (${rows[0].note})`;
+      const wrap = document.createElement('div');
+      wrap.append(title, box);
+      charts.append(wrap);
+
+      const W = box.clientWidth || 320, H = 260;
+      const svg = d3.select(box).append('svg').attr('width', '100%').attr('viewBox', `0 0 ${W} ${H}`)
+        .attr('role', 'img').attr('aria-label', `Loudness across each drive's range for key ${key}`);
+      const all = rows.flatMap((r) => r.curve.map((p) => p[1]));
+      const y = d3.scaleLinear([d3.min(all) - 2, d3.max(all) + 2], [H - 26, 8]).nice();
+      const m = { left: 52, right: 8, top: 8, bottom: 26 };
+      const x = d3.scaleLinear([0, 1], [m.left, W - m.right]);
+      y.ticks(5).forEach((t) => {
+        svg.append('line').attr('x1', m.left).attr('x2', W - m.right).attr('y1', y(t)).attr('y2', y(t))
+          .attr('stroke', 'var(--grid)');
+        svg.append('text').attr('class', 'tick').attr('x', m.left - 6).attr('y', y(t)).attr('text-anchor', 'end')
+          .attr('dominant-baseline', 'middle').text(`${t} dB`);
+      });
+      [[0, 'plays from'], [0.5, ''], [1, 'up to']].forEach(([v, label]) => {
+        svg.append('text').attr('class', 'tick').attr('x', x(v)).attr('y', H - 6)
+          .attr('text-anchor', v === 0 ? 'start' : v === 1 ? 'end' : 'middle').text(label || '50%');
+      });
+      for (const r of rows) {
+        svg.append('path').attr('d', d3.line().x((p) => x(p[0])).y((p) => y(p[1]))(r.curve))
+          .attr('fill', 'none').attr('stroke', color(r.family)).attr('stroke-width', 2)
+          .attr('stroke-linejoin', 'round').attr('stroke-linecap', 'round');
+      }
+
+      const tip = document.createElement('div');
+      tip.className = 'tip';
+      tip.hidden = true;
+      box.append(tip);
+      svg.append('rect').attr('x', m.left).attr('y', m.top).attr('width', W - m.left - m.right)
+        .attr('height', H - m.top - m.bottom).attr('fill', 'transparent')
+        .on('pointermove', (event) => {
+          const [mx, my] = d3.pointer(event);
+          const share = x.invert(mx);
+          const head = document.createElement('div');
+          head.className = 'tip-head';
+          head.textContent = `${pct(share)} of each drive's range`;
+          const lines = rows.map((r) => {
+            const near = d3.least(r.curve, (p) => Math.abs(p[0] - share));
+            const line = document.createElement('div');
+            line.textContent = `${r.family}: ${near[2]}${r.unit} → ${f1(near[1])} dB`;
+            line.style.borderLeft = `3px solid ${color(r.family)}`;
+            line.style.paddingLeft = '6px';
+            return line;
+          });
+          tip.replaceChildren(head, ...lines);
+          tip.hidden = false;
+          const left = mx + 14 + tip.offsetWidth > box.clientWidth ? mx - 14 - tip.offsetWidth : mx + 14;
+          tip.style.left = `${Math.max(0, left)}px`;
+          tip.style.top = `${Math.max(0, my - tip.offsetHeight - 10)}px`;
+        })
+        .on('pointerleave', () => { tip.hidden = true; });
+    }
+  };
+
+  const tbody = document.getElementById('table');
+  tbody.replaceChildren(...data.results.map((r) => {
+    const tr = document.createElement('tr');
+    const cells = [r.family, `${r.key} ${r.note}`, `${r.threshold}${r.unit}`, `${r.max}${r.unit}`,
+      `${f1(r.range_db)} dB`, `${f1(r.soft_db)} dB`, pct(r.first_tenth), `${d3.format('.2f')(r.spread_db)} dB`,
+      pct(r.bounce_rate), `${f1(r.decay_db)} dB`];
+    cells.forEach((text, i) => {
+      const td = document.createElement('td');
+      if (i === 0) {
+        const dot = document.createElement('span');
+        dot.className = 'dot';
+        dot.style.background = color(r.family);
+        td.append(dot);
+      }
+      td.append(text);
+      tr.append(td);
+    });
+    return tr;
+  }));
+
+  draw();
+  let pending;
+  window.addEventListener('resize', () => { clearTimeout(pending); pending = setTimeout(draw, 150); });
+})();
+</script>
+</body>
+</html>

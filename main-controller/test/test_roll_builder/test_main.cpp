@@ -1,5 +1,6 @@
 #include <unity.h>
 #include "app/piano/roll_builder.h"
+#include "app/piano/velocity_table.h"
 
 // MIDI note 60 is middle C, piano key 39.
 static const uint8_t C4 = 60;
@@ -33,9 +34,30 @@ static MidiEvent pedal(uint32_t timeMs, uint8_t value)
   return {timeMs, MidiEventType::Sustain, 0, value};
 }
 
-static void build(std::vector<MidiEvent> events)
+static void build(std::vector<MidiEvent> events, const VelocityTable *timing = nullptr)
 {
-  TEST_ASSERT_TRUE(buildPianoRoll(events, roll));
+  TEST_ASSERT_TRUE(buildPianoRoll(events, roll, timing));
+}
+
+// A table whose hammers land 150 - velocity ms after the press: 149 ms at
+// velocity 1 (the latest, so the lead), 130 at 20, 50 at 100.
+static VelocityTable landingTable(bool withLanding = true)
+{
+  std::string json = "{\"keys\":{}";
+  if (withLanding)
+  {
+    json += ",\"landing_ms\":[";
+    for (int velocity = 1; velocity <= 127; velocity++)
+    {
+      json += (velocity > 1 ? "," : "") + std::to_string(150 - velocity);
+    }
+    json += "]";
+  }
+  json += "}";
+  VelocityTable table;
+  std::string error;
+  TEST_ASSERT_TRUE_MESSAGE(table.load(json.data(), json.size(), error), error.c_str());
+  return table;
 }
 
 struct Expected
@@ -179,6 +201,49 @@ void test_pedal_delays_do_not_pile_up()
   assertRoll({{2000, PEDAL_DOWN, 0, 0}, {2500, PEDAL_UP, 0, 0}, {2700, PEDAL_DOWN, 0, 0}, {3000, PEDAL_UP, 0, 0}});
 }
 
+// --- allowing for when the hammer lands ---
+
+void test_presses_are_sent_early_by_their_landing_time()
+{
+  VelocityTable table = landingTable();
+  build({on(1000, C4, 100), on(1000, D4, 20), off(1500, C4), off(1500, D4)}, &table);
+  // Both sound at 1000 + 149: D4's soft hammer takes 130 ms, C4's 50 ms.
+  assertRoll({{1019, PRESS, D4_KEY, 20}, {1099, PRESS, C4_KEY, 100}, {1649, RELEASE, C4_KEY, 0}, {1649, RELEASE, D4_KEY, 0}});
+  TEST_ASSERT_EQUAL_UINT32(1649, roll.durationMs);
+}
+
+void test_short_note_is_held_until_after_it_lands()
+{
+  VelocityTable table = landingTable();
+  build({on(0, C4, 20), off(10, C4)}, &table);
+  assertRoll({{19, PRESS, C4_KEY, 20}, {19 + 130 + 40, RELEASE, C4_KEY, 0}});
+}
+
+void test_pedal_moves_by_the_lead()
+{
+  VelocityTable table = landingTable();
+  build({pedal(0, 127), pedal(500, 0)}, &table);
+  assertRoll({{149, PEDAL_DOWN, 0, 0}, {649, PEDAL_UP, 0, 0}});
+}
+
+void test_soft_repeats_need_time_for_the_hammer_to_land()
+{
+  VelocityTable table = landingTable();
+  // 200 ms apart is too soon for a hammer that takes 130 ms to land...
+  build({on(0, C4, 20), off(100, C4), on(200, C4, 20), off(300, C4)}, &table);
+  TEST_ASSERT_EQUAL_UINT32(1, roll.mergedNotes);
+  // ...300 ms is enough, with the first released 80 ms before the second.
+  build({on(0, C4, 20), off(100, C4), on(300, C4, 20), off(400, C4)}, &table);
+  assertRoll({{19, PRESS, C4_KEY, 20}, {239, RELEASE, C4_KEY, 0}, {319, PRESS, C4_KEY, 20}, {549, RELEASE, C4_KEY, 0}});
+}
+
+void test_table_without_landing_times_changes_nothing()
+{
+  VelocityTable table = landingTable(false);
+  build({on(0, C4), off(10, C4), pedal(0, 127), pedal(500, 0)}, &table);
+  assertRoll({{0, PEDAL_DOWN, 0, 0}, {0, PRESS, C4_KEY, 64}, {40, RELEASE, C4_KEY, 0}, {500, PEDAL_UP, 0, 0}});
+}
+
 // --- assembly ---
 
 void test_same_time_order_is_release_pedal_press()
@@ -229,6 +294,11 @@ int main()
   RUN_TEST(test_quick_repedal_delays_the_press);
   RUN_TEST(test_brief_pedal_press_is_dropped);
   RUN_TEST(test_pedal_delays_do_not_pile_up);
+  RUN_TEST(test_presses_are_sent_early_by_their_landing_time);
+  RUN_TEST(test_short_note_is_held_until_after_it_lands);
+  RUN_TEST(test_pedal_moves_by_the_lead);
+  RUN_TEST(test_soft_repeats_need_time_for_the_hammer_to_land);
+  RUN_TEST(test_table_without_landing_times_changes_nothing);
   RUN_TEST(test_same_time_order_is_release_pedal_press);
   RUN_TEST(test_empty_input);
   RUN_TEST(test_builder_resets_previous_contents);

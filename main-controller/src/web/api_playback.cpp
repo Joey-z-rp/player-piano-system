@@ -60,7 +60,7 @@ static void handleMidiUpload(AsyncWebServerRequest *request, PianoController &pi
     return;
   }
   std::shared_ptr<PianoRoll> roll = std::make_shared<PianoRoll>();
-  if (!buildPianoRoll(events, *roll))
+  if (!buildPianoRoll(events, *roll, piano.velocities()))
   {
     sendError(request, 500, "out of memory");
     return;

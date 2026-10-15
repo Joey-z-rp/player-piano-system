@@ -22,14 +22,14 @@ typedef struct
   // Duty cycles in hundredths of a percent (0-PWM_DUTY_FULL).
   uint16_t duty_cycle;          // Initial duty cycle
   uint16_t initial_strike_time; // Initial strike time in ms (0 = use default)
-  uint16_t followup_duty_cycle; // Follow-up duty cycle (0 = no follow-up)
-  uint16_t followup_time;       // Follow-up time in ms (0 = no follow-up)
+  KeyPhase_t phases[MAX_PHASES]; // between the strike and the hold (a 0 duty or time skips one)
+  uint8_t phase_count;
   uint16_t hold_duty_cycle;     // Hold duty (DUTY_OMITTED = use default)
 } ParsedCommand_t;
 
-// Commands pass from the serial interrupt (Enqueue, which only moves tail) to
-// the main loop (Dequeue, which only moves head). Neither side writes the
-// other's index, so the interrupt can't corrupt the queue mid-update.
+// Parsed commands pass from RS485_Poll (Enqueue, which only moves tail) to
+// the key driver's update (Dequeue, which only moves head), both in the main
+// loop; neither side writes the other's index.
 typedef struct
 {
   ParsedCommand_t commands[COMMAND_QUEUE_SIZE];

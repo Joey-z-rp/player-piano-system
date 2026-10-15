@@ -105,6 +105,11 @@ PlaybackStatus PianoController::status() const
   return result;
 }
 
+const VelocityTable *PianoController::velocities() const
+{
+  return velocityTable;
+}
+
 size_t PianoController::pendingCommands() const
 {
   return messageQueue == nullptr ? 0 : uxQueueMessagesWaiting(messageQueue);
@@ -248,7 +253,7 @@ void PianoController::sendRollEvent(const RollEvent &event)
   switch (event.type)
   {
   case RollEventType::KeyPress:
-    sendPress(event.key, velocityTable->duty(event.key, event.velocity));
+    sendPress(event.key, event.velocity);
     break;
   case RollEventType::KeyRelease:
     snprintf(command, sizeof(command), "R:%u:0", event.key);
@@ -294,23 +299,10 @@ bool PianoController::send(const char *command)
   return true;
 }
 
-// The driver takes duty in percent with up to two decimals: 3225 -> "32.25".
-void PianoController::sendPress(uint8_t key, uint16_t duty)
+void PianoController::sendPress(uint8_t key, uint8_t velocity)
 {
   char command[DRIVER_COMMAND_MAX_LENGTH + 1];
-  unsigned whole = duty / 100, hundredths = duty % 100;
-  if (hundredths == 0)
-  {
-    snprintf(command, sizeof(command), "P:%u:%u", key, whole);
-  }
-  else if (hundredths % 10 == 0)
-  {
-    snprintf(command, sizeof(command), "P:%u:%u.%u", key, whole, hundredths / 10);
-  }
-  else
-  {
-    snprintf(command, sizeof(command), "P:%u:%u.%02u", key, whole, hundredths);
-  }
+  velocityTable->pressCommand(key, velocity, command, sizeof(command));
   send(command);
 }
 

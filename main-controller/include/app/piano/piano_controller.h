@@ -12,7 +12,7 @@
 class Rs485Module;
 class VelocityTable;
 
-static const size_t DRIVER_COMMAND_MAX_LENGTH = 32;
+static const size_t DRIVER_COMMAND_MAX_LENGTH = 48; // e.g. "P:87:33.25:50:22.5:150:60.25:40:37.5" is 36
 static const size_t DRIVER_COMMAND_QUEUE_LENGTH = 32;
 
 
@@ -22,6 +22,10 @@ static const size_t DRIVER_COMMAND_QUEUE_LENGTH = 32;
 static const uint8_t SUSTAIN_PEDAL_CHANNELS[] = {88, 89};
 static const char SUSTAIN_PEDAL_PRESS[] = "100:30:100:30:55";
 static const char SUSTAIN_PEDAL_RELEASE[] = "40:40:30:40:0";
+
+// Key presses are driven as the velocity table's DriveSettings say (see
+// sendPress). Without landing times, presses use the drivers' defaults (a
+// 50 ms strike, then 20% until the release).
 
 // Before each song, and on request, the driver boards are restarted and given
 // this long to come back, so a driver stuck in a bad state can't carry it
@@ -78,6 +82,8 @@ public:
   PlaybackResult setPedal(bool down);
   PlaybackStatus status() const;
   size_t pendingCommands() const;
+  // For building rolls timed to how this piano's hammers land.
+  const VelocityTable *velocities() const;
 
   static bool isDriverCommand(const String &command);
 
@@ -110,7 +116,7 @@ private:
   void restartDrivers();
   void sendPedal(const char *params);
   bool send(const char *command);
-  void sendPress(uint8_t key, uint16_t duty);
+  void sendPress(uint8_t key, uint8_t velocity);
 
   Rs485Module *rs485;
   const VelocityTable *velocityTable;

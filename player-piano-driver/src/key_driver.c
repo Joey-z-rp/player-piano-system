@@ -16,20 +16,50 @@ void KeyDriver_Init(KeyDriverModule_t *key_driver)
   {
     key_driver->keys[i].state = KEY_STATE_IDLE;
     key_driver->keys[i].initial_strike_start_time = 0;
-    key_driver->keys[i].followup_start_time = 0;
+    key_driver->keys[i].phase_start_time = 0;
     key_driver->keys[i].initial_duty_cycle = 0;
-    key_driver->keys[i].followup_duty_cycle = 0;
     key_driver->keys[i].hold_duty_cycle = HOLD_DUTY;
     key_driver->keys[i].initial_strike_time_ms = INITIAL_STRIKE_TIME_MS;
-    key_driver->keys[i].followup_time_ms = 0;
+    key_driver->keys[i].phase_count = 0;
+    key_driver->keys[i].phase = 0;
   }
 
   // Set global hold duty cycle
   key_driver->hold_duty_cycle = HOLD_DUTY;
 }
 
-// Press a key with specified duty cycle and optional timing parameters
-void KeyDriver_PressKey(KeyDriverModule_t *key_driver, uint8_t key, uint16_t duty_cycle, uint16_t initial_strike_time, uint16_t followup_duty_cycle, uint16_t followup_time, uint16_t hold_duty_cycle)
+// From phase `from` on, the first phase that has a duty and a time, or
+// phase_count if none is left.
+static uint8_t NextPhase(const KeyDriver_t *key, uint8_t from)
+{
+  while (from < key->phase_count && (key->phases[from].duty_cycle == 0 || key->phases[from].time_ms == 0))
+  {
+    from++;
+  }
+  return from;
+}
+
+// Starts phase `phase` at `now`, or the hold if no phase is left.
+static void StartPhase(KeyDriver_t *key, uint8_t channel, uint8_t phase, uint32_t now)
+{
+  phase = NextPhase(key, phase);
+  if (phase < key->phase_count)
+  {
+    key->state = KEY_STATE_PHASE;
+    key->phase = phase;
+    key->phase_start_time = now;
+    PWM_SetDutyCycle(channel, key->phases[phase].duty_cycle);
+  }
+  else
+  {
+    key->state = KEY_STATE_HOLD;
+    PWM_SetDutyCycle(channel, key->hold_duty_cycle);
+  }
+}
+
+// Press a key: the strike, then its phases, then the hold until released.
+void KeyDriver_PressKey(KeyDriverModule_t *key_driver, uint8_t key, uint16_t duty_cycle, uint16_t initial_strike_time,
+                        const KeyPhase_t *phases, uint8_t phase_count, uint16_t hold_duty_cycle)
 {
   if (key_driver == NULL || key >= NUM_KEYS)
   {
@@ -41,9 +71,9 @@ void KeyDriver_PressKey(KeyDriverModule_t *key_driver, uint8_t key, uint16_t dut
   {
     duty_cycle = PWM_DUTY_FULL;
   }
-  if (followup_duty_cycle > PWM_DUTY_FULL)
+  if (phase_count > MAX_PHASES)
   {
-    followup_duty_cycle = PWM_DUTY_FULL;
+    phase_count = MAX_PHASES;
   }
 
   // 0-100% is explicit (including 0%); DUTY_OMITTED uses the default hold.
@@ -59,14 +89,22 @@ void KeyDriver_PressKey(KeyDriverModule_t *key_driver, uint8_t key, uint16_t dut
   // Set key state to initial strike
   key_driver->keys[key].state = KEY_STATE_INITIAL_STRIKE;
   key_driver->keys[key].initial_strike_start_time = HAL_GetTick();
-  key_driver->keys[key].followup_start_time = 0;
+  key_driver->keys[key].phase_start_time = 0;
   key_driver->keys[key].initial_duty_cycle = duty_cycle;
-  key_driver->keys[key].followup_duty_cycle = followup_duty_cycle;
   key_driver->keys[key].hold_duty_cycle = hold_duty_cycle;
+  for (uint8_t i = 0; i < phase_count; i++)
+  {
+    key_driver->keys[key].phases[i] = phases[i];
+    if (key_driver->keys[key].phases[i].duty_cycle > PWM_DUTY_FULL)
+    {
+      key_driver->keys[key].phases[i].duty_cycle = PWM_DUTY_FULL;
+    }
+  }
+  key_driver->keys[key].phase_count = phase_count;
+  key_driver->keys[key].phase = 0;
 
   // Set timing parameters (use defaults if 0)
   key_driver->keys[key].initial_strike_time_ms = (initial_strike_time > 0) ? initial_strike_time : INITIAL_STRIKE_TIME_MS;
-  key_driver->keys[key].followup_time_ms = followup_time;
 
   // Immediately set the initial duty cycle
   PWM_SetDutyCycle(key, duty_cycle);
@@ -108,33 +146,18 @@ void KeyDriver_Update(KeyDriverModule_t *key_driver)
       break;
 
     case KEY_STATE_INITIAL_STRIKE:
-      // Check if initial strike time has elapsed
+      // When the strike is over, the first phase (or the hold)
       if ((current_time - key->initial_strike_start_time) >= key->initial_strike_time_ms)
       {
-        // Check if we have follow-up parameters
-        if (key->followup_duty_cycle > 0 && key->followup_time_ms > 0)
-        {
-          // Transition to follow-up state
-          key->state = KEY_STATE_FOLLOWUP;
-          key->followup_start_time = current_time;
-          PWM_SetDutyCycle(i, key->followup_duty_cycle);
-        }
-        else
-        {
-          // Transition directly to hold state
-          key->state = KEY_STATE_HOLD;
-          PWM_SetDutyCycle(i, key->hold_duty_cycle);
-        }
+        StartPhase(key, i, 0, current_time);
       }
       break;
 
-    case KEY_STATE_FOLLOWUP:
-      // Check if follow-up time has elapsed
-      if ((current_time - key->followup_start_time) >= key->followup_time_ms)
+    case KEY_STATE_PHASE:
+      // When this phase is over, the next one (or the hold)
+      if ((current_time - key->phase_start_time) >= key->phases[key->phase].time_ms)
       {
-        // Transition to hold state
-        key->state = KEY_STATE_HOLD;
-        PWM_SetDutyCycle(i, key->hold_duty_cycle);
+        StartPhase(key, i, key->phase + 1, current_time);
       }
       break;
 

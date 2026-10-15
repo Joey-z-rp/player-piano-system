@@ -1,0 +1,140 @@
+{
+ "keys": {
+  "24": {
+   "bounces": true,
+   "comment": "bounces above 71%"
+  },
+  "26": {
+   "bounces": true,
+   "comment": "bounces above 44%"
+  },
+  "27": {
+   "bounces": true,
+   "comment": "bounces above 50%"
+  },
+  "28": {
+   "bounces": true,
+   "comment": "bounce above 45%"
+  },
+  "29": {
+   "bounces": true,
+   "comment": "bounces above 80%"
+  },
+  "30": {
+   "bounces": true,
+   "comment": "b > 39%"
+  },
+  "31": {
+   "bounces": true,
+   "comment": "b > 70"
+  },
+  "32": {
+   "bounces": true,
+   "comment": "b > 40"
+  },
+  "34": {
+   "bounces": true,
+   "comment": "b > 37"
+  },
+  "36": {
+   "bounces": true,
+   "comment": "b > 39"
+  },
+  "37": {
+   "bounces": true,
+   "comment": "b > 60"
+  },
+  "38": {
+   "bounces": true,
+   "comment": "b > 40"
+  },
+  "39": {
+   "bounces": true,
+   "comment": "b > 40"
+  },
+  "40": {
+   "bounces": true,
+   "comment": "b > 55"
+  },
+  "41": {
+   "bounces": true,
+   "comment": "b > 40"
+  },
+  "42": {
+   "bounces": true,
+   "comment": "b > 34"
+  },
+  "44": {
+   "bounces": true,
+   "comment": "b > 34"
+  },
+  "45": {
+   "bounces": true,
+   "comment": "b > 50"
+  },
+  "46": {
+   "bounces": true,
+   "comment": "b > 35"
+  },
+  "47": {
+   "bounces": true,
+   "comment": "b > 30"
+  },
+  "48": {
+   "bounces": true,
+   "comment": "b > 45"
+  },
+  "50": {
+   "bounces": true,
+   "comment": "b > 36"
+  },
+  "51": {
+   "bounces": true,
+   "comment": "b > 30"
+  },
+  "52": {
+   "bounces": true,
+   "comment": "b > 33"
+  },
+  "53": {
+   "bounces": true,
+   "comment": "b > 37"
+  },
+  "56": {
+   "bounces": true,
+   "comment": "need higher coast duty - all damped",
+   "damped": true
+  },
+  "57": {
+   "bounces": true,
+   "comment": "b > 38"
+  },
+  "58": {
+   "bounces": true,
+   "comment": "b > 44"
+  },
+  "59": {
+   "bounces": true,
+   "comment": "b > 34"
+  },
+  "61": {
+   "bounces": true,
+   "comment": "b > 43"
+  },
+  "64": {
+   "bounces": true,
+   "comment": "b > 50"
+  }
+ },
+ "strikes": {
+  "0:0": "note",
+  "41:11": "note",
+  "41:15": "note",
+  "41:16": "note",
+  "41:17": "note",
+  "41:20": "note",
+  "41:21": "note",
+  "41:23": "note",
+  "41:28": "note"
+ }
+}

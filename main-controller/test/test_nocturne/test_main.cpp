@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include "app/midi/midi_parser.h"
 #include "app/piano/roll_builder.h"
+#include "app/piano/velocity_table.h"
 
 static const char FIXTURE[] = "test/fixtures/chopin_nocturne.mid";
 
@@ -23,6 +24,8 @@ static const uint32_t PEDAL_MIN_MS = 100;
 static std::vector<uint8_t> file;
 static std::vector<MidiEvent> events;
 static PianoRoll roll;
+static PianoRoll timedRoll; // built with landing times, as the controller does
+static VelocityTable timing;
 static bool loaded = false;
 static bool built = false;
 static std::string error;
@@ -155,6 +158,62 @@ void test_every_key_is_released_and_rested_before_striking_again()
   }
 }
 
+// About what key 40 measured: 150 ms at velocity 1 down to 54 ms at 127.
+static bool loadTiming()
+{
+  std::string json = "{\"keys\":{},\"landing_ms\":[";
+  for (int velocity = 1; velocity <= 127; velocity++)
+  {
+    json += (velocity > 1 ? "," : "") + std::to_string(150 - (velocity - 1) * 96 / 126);
+  }
+  json += "]}";
+  return timing.load(json.data(), json.size(), error);
+}
+
+void test_timed_roll_holds_each_key_until_its_hammer_lands()
+{
+  bool down[PIANO_KEY_COUNT] = {};
+  uint32_t pressedAt[PIANO_KEY_COUNT] = {};
+  uint32_t releasedAt[PIANO_KEY_COUNT] = {};
+  bool struck[PIANO_KEY_COUNT] = {};
+  uint16_t landing[PIANO_KEY_COUNT] = {};
+  char message[80];
+
+  for (size_t i = 0; i < timedRoll.events.size(); i++)
+  {
+    const RollEvent &event = timedRoll.events[i];
+    if (i > 0)
+    {
+      TEST_ASSERT_TRUE_MESSAGE(timedRoll.events[i - 1].timeMs <= event.timeMs, "timed roll out of time order");
+    }
+    uint8_t key = event.key;
+    if (event.type == RollEventType::KeyPress)
+    {
+      snprintf(message, sizeof(message), "key %u pressed at %u while down", key, (unsigned)event.timeMs);
+      TEST_ASSERT_FALSE_MESSAGE(down[key], message);
+      if (struck[key])
+      {
+        snprintf(message, sizeof(message), "key %u re-struck at %u too soon", key, (unsigned)event.timeMs);
+        TEST_ASSERT_TRUE_MESSAGE(event.timeMs >= releasedAt[key] + RESTRIKE_GAP_MS, message);
+      }
+      down[key] = struck[key] = true;
+      pressedAt[key] = event.timeMs;
+      landing[key] = timing.landingMs(key, event.velocity);
+    }
+    else if (event.type == RollEventType::KeyRelease)
+    {
+      snprintf(message, sizeof(message), "key %u released at %u before its hammer landed", key, (unsigned)event.timeMs);
+      TEST_ASSERT_TRUE_MESSAGE(event.timeMs >= pressedAt[key] + landing[key] + MIN_NOTE_MS, message);
+      down[key] = false;
+      releasedAt[key] = event.timeMs;
+    }
+  }
+  TEST_ASSERT_EQUAL_UINT32(NOTE_ONS, timedRoll.noteCount + timedRoll.mergedNotes);
+  snprintf(message, sizeof(message), "repeats too fast to re-strike: %u untimed, %u allowing for landing",
+           (unsigned)roll.mergedNotes, (unsigned)timedRoll.mergedNotes);
+  TEST_MESSAGE(message);
+}
+
 void test_pedal_alternates_and_is_spaced()
 {
   bool pedalDown = false;
@@ -191,13 +250,15 @@ void test_pedal_alternates_and_is_spaced()
 int main()
 {
   loaded = loadFixture();
-  built = loaded && parseMidiFile(file.data(), file.size(), events, error) && buildPianoRoll(events, roll);
+  built = loaded && parseMidiFile(file.data(), file.size(), events, error) && buildPianoRoll(events, roll) &&
+          loadTiming() && buildPianoRoll(events, timedRoll, &timing);
 
   UNITY_BEGIN();
   RUN_TEST(test_parser_reads_every_event);
   RUN_TEST(test_roll_accounts_for_every_note);
   RUN_TEST(test_roll_is_in_time_order_with_releases_first);
   RUN_TEST(test_every_key_is_released_and_rested_before_striking_again);
+  RUN_TEST(test_timed_roll_holds_each_key_until_its_hammer_lands);
   RUN_TEST(test_pedal_alternates_and_is_spaced);
   return UNITY_END();
 }

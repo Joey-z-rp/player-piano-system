@@ -26,7 +26,7 @@ private:
   void handleLine();
 
   PianoController *piano;
-  char line[48];
+  char line[64]; // longer than DRIVER_COMMAND_MAX_LENGTH
   size_t length;
   bool overflow;
 };

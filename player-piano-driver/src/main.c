@@ -22,6 +22,8 @@ int main(void)
 
   while (1)
   {
+    RS485_Poll(); // parse what's arrived; commands queue for the key driver
+
     uint32_t current_time = HAL_GetTick();
 
     if ((current_time - last_update_time) >= 1)

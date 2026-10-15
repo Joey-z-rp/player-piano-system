@@ -81,11 +81,14 @@ static int ParseNumber(const char *message, uint16_t length, uint16_t *i, uint16
 HAL_StatusTypeDef CommandParser_ParseMessage(const char *message, uint16_t length, ParsedCommand_t *command)
 {
   // Formats (duty cycles in percent, with up to two decimals; times in ms):
-  //   P:<key>:<duty>[:<strike time>[:<follow-up duty>:<follow-up time>[:<hold duty>]]]
+  //   P:<key>:<duty>[:<strike time>[:<phase duty>:<phase time>]...[:<hold duty>]]
   //   R:<key>[:<anything>]
-  // e.g. "P:40:32.25", "P:88:100:30:100:30:55", "R:40:0".
-  // Optional fields go by position: a strike time of 0 uses the default, a
-  // follow-up duty or time of 0 skips the follow-up, and a hold of 0 is 0%.
+  // e.g. "P:40:32.25", "P:88:100:30:100:30:55", "P:30:65:50:20:31:60:40:35",
+  // "R:40:0". After the strike time come up to MAX_PHASES phases as duty:time
+  // pairs, played in turn, then the hold: an odd number of fields there means
+  // the last is the hold, an even number means no hold was given (the default
+  // applies). A strike time of 0 uses the default, a phase with a duty or time
+  // of 0 is skipped, and a hold of 0 is 0%.
   // Keys 0-87 are piano keys; 88 and 89 are board 0's pedal outputs.
   if (message == NULL || command == NULL || length < 3 || message[1] != ':')
   {
@@ -93,8 +96,7 @@ HAL_StatusTypeDef CommandParser_ParseMessage(const char *message, uint16_t lengt
   }
 
   command->initial_strike_time = 0;
-  command->followup_duty_cycle = 0;
-  command->followup_time = 0;
+  command->phase_count = 0;
   command->hold_duty_cycle = DUTY_OMITTED;
   command->duty_cycle = 0;
 
@@ -135,32 +137,55 @@ HAL_StatusTypeDef CommandParser_ParseMessage(const char *message, uint16_t lengt
     return HAL_ERROR;
   }
 
-  for (uint8_t field = 0; i < length && message[i] == ':'; field++)
+  if (i < length && message[i] == ':')
   {
     i++;
-    int ok;
-    switch (field)
-    {
-    case 0:
-      ok = ParseNumber(message, length, &i, &command->initial_strike_time);
-      break;
-    case 1:
-      ok = ParseDuty(message, length, &i, &command->followup_duty_cycle);
-      break;
-    case 2:
-      ok = ParseNumber(message, length, &i, &command->followup_time);
-      break;
-    case 3:
-      ok = ParseDuty(message, length, &i, &command->hold_duty_cycle);
-      break;
-    default:
-      ok = 0; // too many fields
-    }
-    if (!ok)
+    if (!ParseNumber(message, length, &i, &command->initial_strike_time))
     {
       return HAL_ERROR;
     }
   }
+
+  // The rest: phase duty:time pairs, maybe a hold. Where each field starts,
+  // until the count says which is which.
+  uint16_t starts[2 * MAX_PHASES + 1];
+  uint8_t fields = 0;
+  while (i < length && message[i] == ':')
+  {
+    if (fields == sizeof(starts) / sizeof(starts[0]))
+    {
+      return HAL_ERROR; // too many fields
+    }
+    starts[fields++] = ++i;
+    while (i < length && message[i] != ':' && message[i] != '\r' && message[i] != ' ')
+    {
+      i++;
+    }
+  }
+  uint8_t pairs = fields / 2;
+  for (uint8_t f = 0; f < fields; f++)
+  {
+    uint16_t at = starts[f];
+    int ok;
+    if (f == 2 * pairs)
+    {
+      ok = ParseDuty(message, length, &at, &command->hold_duty_cycle); // the odd one out: the hold
+    }
+    else if (f % 2 == 0)
+    {
+      ok = ParseDuty(message, length, &at, &command->phases[f / 2].duty_cycle);
+    }
+    else
+    {
+      ok = ParseNumber(message, length, &at, &command->phases[f / 2].time_ms);
+    }
+    // Each field must be read to its end: the next ':' or the end of the message.
+    if (!ok || (at < length && message[at] != ':' && message[at] != '\r' && message[at] != ' '))
+    {
+      return HAL_ERROR;
+    }
+  }
+  command->phase_count = pairs;
 
   // Allow a trailing carriage return or spaces, nothing else.
   while (i < length && (message[i] == '\r' || message[i] == ' '))
@@ -185,9 +210,8 @@ void CommandParser_ExecuteCommand(const ParsedCommand_t *command, KeyDriverModul
 
   if (command->type == COMMAND_PRESS)
   {
-    KeyDriver_PressKey(key_driver, command->channel, command->duty_cycle,
-                       command->initial_strike_time, command->followup_duty_cycle,
-                       command->followup_time, command->hold_duty_cycle);
+    KeyDriver_PressKey(key_driver, command->channel, command->duty_cycle, command->initial_strike_time,
+                       command->phases, command->phase_count, command->hold_duty_cycle);
   }
   else if (command->type == COMMAND_RELEASE)
   {

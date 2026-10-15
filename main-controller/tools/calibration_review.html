@@ -1,0 +1,308 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Calibration review</title>
+<!-- Served by `calibrate_dynamics.py review`, which also serves each key's
+     strikes (/key/N), their recordings (/audio/N/REPEAT.wav) and saves flags. -->
+<style>
+  :root {
+    color-scheme: light;
+    --bg: #f6f6f3; --panel: #fcfcfb; --fg: #0b0b0b; --muted: #5f5e5a; --line: #e1e0d9;
+    --grid: #ecebe5; --popover: #ffffff; --accent: #2a78d6;
+    --note: #2a78d6; --thump: #eb6834; --miss: #a3a29b; --mine: #1baf7a;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      color-scheme: dark;
+      --bg: #0d0d0d; --panel: #1a1a19; --fg: #ffffff; --muted: #a9a89f; --line: #2c2c2a;
+      --grid: #262624; --popover: #242422; --accent: #3987e5;
+      --note: #3987e5; --thump: #d95926; --miss: #6b6a64; --mine: #199e70;
+    }
+  }
+  [hidden] { display: none !important; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 76rem; margin-inline: auto; padding: 20px clamp(16px, 4vw, 40px) 48px; display: grid; gap: 16px; }
+  h1 { margin: 0; font: 400 28px/1.2 Georgia, "Times New Roman", serif; }
+  h2 { margin: 0; font-size: 15px; font-weight: 600; }
+  p { margin: 0; color: var(--muted); }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 16px; display: grid; gap: 10px; min-width: 0; }
+  .bar { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; }
+  button, select, input[type=text] { font: inherit; color: var(--fg); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 5px 10px; }
+  button { cursor: pointer; }
+  button:hover { border-color: var(--muted); }
+  input[type=text] { flex: 1 1 16rem; min-width: 0; }
+  label { display: inline-flex; gap: 6px; align-items: center; }
+  .key-name { font-size: 22px; font-weight: 600; min-width: 7ch; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip { font-size: 12px; border: 1px solid var(--line); border-radius: 999px; padding: 2px 8px; color: var(--muted); }
+  .chip.warn { border-color: var(--thump); color: var(--fg); }
+  .saved { font-size: 12px; color: var(--muted); }
+  .charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 22rem), 1fr)); gap: 16px; align-items: start; }
+  .plot { position: relative; }
+  .plot svg { display: block; overflow: visible; }
+  .tick { font-size: 12px; fill: var(--muted); font-variant-numeric: tabular-nums; }
+  .axis-note { font-size: 12px; fill: var(--muted); }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 12px; color: var(--muted); }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+  .tip { position: absolute; pointer-events: none; z-index: 2; white-space: nowrap; font-size: 12px; background: var(--popover);
+    border: 1px solid var(--line); border-radius: 8px; padding: 4px 8px; box-shadow: 0 4px 16px rgba(0, 0, 0, .12); }
+  .table-wrap { overflow: auto; max-height: 28rem; }
+  table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+  th, td { padding: 3px 8px; border-top: 1px solid var(--line); text-align: right; white-space: nowrap; }
+  th { font-size: 12px; color: var(--muted); font-weight: 600; border-top: 0; position: sticky; top: 0; background: var(--panel); }
+  td:nth-child(3), th:nth-child(3), td:nth-child(4), th:nth-child(4) { text-align: left; }
+  tr.playing td { background: color-mix(in srgb, var(--accent) 14%, transparent); }
+  tr.ignored td { color: var(--muted); }
+  td select { padding: 1px 4px; }
+  .result-note { color: var(--note); } .result-thump { color: var(--thump); } .result-miss { color: var(--muted); }
+  .hint { font-size: 12px; color: var(--muted); }
+</style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>
+</head>
+<body>
+<main>
+  <header class="bar">
+    <h1>Calibration review</h1>
+    <span class="hint">← → change key · space replays · click a dot or row to hear it</span>
+  </header>
+
+  <section class="card">
+    <div class="bar">
+      <button type="button" id="prev" aria-label="Previous key">◀</button>
+      <select id="key-select" aria-label="Key"></select>
+      <button type="button" id="next" aria-label="Next key">▶</button>
+      <span class="key-name" id="key-name"></span>
+      <span id="summary"></span>
+    </div>
+    <div class="chips" id="auto"></div>
+    <div class="bar">
+      <strong>By ear:</strong>
+      <label><input type="checkbox" id="flag-damped"> Damped</label>
+      <label><input type="checkbox" id="flag-bounces"> Bounces</label>
+      <input type="text" id="flag-comment" placeholder="Comment (e.g. bounces above 60%)" aria-label="Comment">
+      <span class="saved" id="saved"></span>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="legend">
+      <span><i class="dot" style="background: var(--note)"></i>note</span>
+      <span><i class="dot" style="background: var(--thump)"></i>thump</span>
+      <span><i class="dot" style="background: var(--miss)"></i>too short / silent</span>
+      <span><i class="dot" style="border: 2px solid var(--fg)"></i>bounced</span>
+      <span><i class="dot" style="background: var(--mine)"></i>your verdict</span>
+      <span>faded: first strike, ignored</span>
+    </div>
+    <div class="charts">
+      <div><h2>Loudness</h2><div class="plot" id="loud"></div></div>
+      <div><h2>When the hammer landed</h2><div class="plot" id="landing"></div></div>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Strikes</h2>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>#</th><th>Duty</th><th>Heard as</th><th>Your verdict</th><th>Loudness</th><th>Landed</th>
+          <th>Decay</th><th>Bounce</th><th></th></tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+  </section>
+</main>
+
+<script>
+(() => {
+  const state = { key: null, data: null, playing: null, audio: new Audio() };
+  const $ = (id) => document.getElementById(id);
+  const f1 = d3.format('.1f');
+  const fmtDuty = (d) => `${+d.toFixed(2)}%`;
+  const MISS = new Set(['silent', 'too short']);
+
+  const kind = (s) => s.verdict || (s.result === 'hit' ? 'note' : MISS.has(s.result) ? 'miss' : 'thump');
+  const fill = (s) => s.verdict ? 'var(--mine)' : { note: 'var(--note)', thump: 'var(--thump)', miss: 'var(--miss)' }[kind(s)];
+
+  async function load(key) {
+    const res = await fetch(`/key/${key}`);
+    if (!res.ok) return;
+    state.key = key;
+    state.data = await res.json();
+    try { localStorage.setItem('review-key', key); } catch (e) { /* storage unavailable */ }
+    render();
+  }
+
+  async function post(body) {
+    $('saved').textContent = 'saving…';
+    const res = await fetch('/flags', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key: state.key, ...body }) });
+    if (!res.ok) { $('saved').textContent = 'not saved'; return; }
+    state.data = await res.json();
+    $('saved').textContent = 'saved';
+    render(true);
+  }
+
+  function play(strike) {
+    state.playing = strike.repeat;
+    state.audio.src = `/audio/${state.key}/${strike.repeat}.wav`;
+    state.audio.play();
+    document.querySelectorAll('#rows tr').forEach((tr) => tr.classList.toggle('playing', +tr.dataset.repeat === strike.repeat));
+    const row = document.querySelector(`#rows tr[data-repeat="${strike.repeat}"]`);
+    if (row) row.scrollIntoView({ block: 'nearest' });
+    drawCharts();
+  }
+
+  function render(keepFlags) {
+    const d = state.data, s = d.summary;
+    const select = $('key-select');
+    if (select.options.length !== d.keys.length) {
+      select.replaceChildren(...d.keys.map((k) => new Option(`Key ${k}`, k)));
+    }
+    select.value = d.key;
+    $('key-name').textContent = d.note;
+    $('summary').textContent = s
+      ? `plays from ${fmtDuty(s.threshold)} · louder until ${fmtDuty(s.max)} · notes die away ${f1(s.decay_db)} dB in 200 ms`
+      : 'never played reliably';
+    const chips = [];
+    if (s && s.damped) chips.push(['Damped? (dies away faster than its neighbours)', true]);
+    if (s && s.bounced.length) chips.push([`Bounce? at ${s.bounced.map(fmtDuty).join(', ')}`, true]);
+    if (!chips.length) chips.push(['Nothing flagged automatically', false]);
+    $('auto').replaceChildren(...chips.map(([text, warn]) => {
+      const el = document.createElement('span');
+      el.className = warn ? 'chip warn' : 'chip';
+      el.textContent = text;
+      return el;
+    }));
+    if (!keepFlags) {
+      $('flag-damped').checked = !!d.flags.damped;
+      $('flag-bounces').checked = !!d.flags.bounces;
+      $('flag-comment').value = d.flags.comment || '';
+      $('saved').textContent = '';
+    }
+    renderTable();
+    drawCharts();
+  }
+
+  function renderTable() {
+    $('rows').replaceChildren(...state.data.strikes.map((s) => {
+      const tr = document.createElement('tr');
+      tr.dataset.repeat = s.repeat;
+      if (s.ignored) tr.classList.add('ignored');
+      if (s.repeat === state.playing) tr.classList.add('playing');
+      const cells = [s.repeat, fmtDuty(s.duty), null, null, `${f1(s.peak_db)} dB`,
+        s.lands_ms == null ? '–' : `${s.lands_ms} ms`, s.decay_db == null ? '–' : `${f1(s.decay_db)} dB`, s.bounce ? 'yes' : ''];
+      cells.forEach((text, i) => {
+        const td = document.createElement('td');
+        if (i === 2) {
+          const auto = s.result === 'hit' ? 'note' : s.result;
+          td.textContent = s.ignored ? `${auto} (ignored)` : auto;
+          td.className = `result-${s.result === 'hit' ? 'note' : MISS.has(s.result) ? 'miss' : 'thump'}`;
+        } else if (i === 3) {
+          const sel = document.createElement('select');
+          sel.setAttribute('aria-label', `Verdict for strike ${s.repeat}`);
+          [['', 'automatic'], ['note', 'note'], ['thump', 'thump']].forEach(([v, t]) => sel.add(new Option(t, v)));
+          sel.value = s.verdict || '';
+          sel.addEventListener('click', (e) => e.stopPropagation());
+          sel.addEventListener('change', () => post({ repeat: s.repeat, verdict: sel.value || null }));
+          td.append(sel);
+        } else {
+          td.textContent = text;
+        }
+        tr.append(td);
+      });
+      const td = document.createElement('td');
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.textContent = '▶';
+      btn.setAttribute('aria-label', `Play strike ${s.repeat}`);
+      td.append(btn);
+      tr.append(td);
+      tr.addEventListener('click', () => play(s));
+      return tr;
+    }));
+  }
+
+  function chart(box, { y, yFormat, yLabel, curve }) {
+    box.replaceChildren();
+    const strikes = state.data.strikes.filter((s) => y(s) != null);
+    const W = box.clientWidth || 360, H = 280;
+    const m = { left: 54, right: 10, top: 10, bottom: 34 };
+    const all = state.data.strikes;
+    const x = d3.scaleLinear(d3.extent(all, (s) => s.duty), [m.left, W - m.right]).nice();
+    const ys = strikes.map(y);
+    if (!ys.length) return;
+    const yScale = d3.scaleLinear([d3.min(ys) - 2, d3.max(ys) + 2], [H - m.bottom, m.top]).nice();
+    const svg = d3.select(box).append('svg').attr('width', '100%').attr('viewBox', `0 0 ${W} ${H}`)
+      .attr('role', 'img').attr('aria-label', `${yLabel} of each strike against duty`);
+    yScale.ticks(5).forEach((t) => {
+      svg.append('line').attr('x1', m.left).attr('x2', W - m.right).attr('y1', yScale(t)).attr('y2', yScale(t)).attr('stroke', 'var(--grid)');
+      svg.append('text').attr('class', 'tick').attr('x', m.left - 6).attr('y', yScale(t)).attr('text-anchor', 'end')
+        .attr('dominant-baseline', 'middle').text(yFormat(t));
+    });
+    x.ticks(6).forEach((t) => svg.append('text').attr('class', 'tick').attr('x', x(t)).attr('y', H - m.bottom + 16)
+      .attr('text-anchor', 'middle').text(`${t}%`));
+    svg.append('text').attr('class', 'axis-note').attr('x', W - m.right).attr('y', H - 2).attr('text-anchor', 'end').text('duty');
+    if (curve && curve.length > 1) {
+      svg.append('path').attr('d', d3.line().x((p) => x(p[0])).y((p) => yScale(p[1]))(curve))
+        .attr('fill', 'none').attr('stroke', 'var(--muted)').attr('stroke-width', 1.5).attr('opacity', 0.6);
+    }
+    const tip = document.createElement('div');
+    tip.className = 'tip';
+    tip.hidden = true;
+    box.append(tip);
+    svg.selectAll(null).data(strikes).join('circle')
+      .attr('cx', (s) => x(s.duty)).attr('cy', (s) => yScale(y(s)))
+      .attr('r', (s) => s.repeat === state.playing ? 7 : 5)
+      .attr('fill', fill).attr('opacity', (s) => s.ignored ? 0.3 : 0.9)
+      .attr('stroke', (s) => s.bounce || s.repeat === state.playing ? 'var(--fg)' : 'var(--panel)')
+      .attr('stroke-width', (s) => s.bounce || s.repeat === state.playing ? 2 : 1)
+      .style('cursor', 'pointer')
+      .on('click', (event, s) => play(s))
+      .on('pointerenter', (event, s) => {
+        tip.textContent = `#${s.repeat} · ${fmtDuty(s.duty)} · ${kind(s)} · ${yFormat(y(s))}`;
+        tip.hidden = false;
+        const [mx, my] = d3.pointer(event, box);
+        tip.style.left = `${Math.min(mx + 12, box.clientWidth - tip.offsetWidth)}px`;
+        tip.style.top = `${Math.max(0, my - 34)}px`;
+      })
+      .on('pointerleave', () => { tip.hidden = true; });
+  }
+
+  function drawCharts() {
+    const s = state.data.summary;
+    chart($('loud'), { y: (st) => st.peak_db, yFormat: (v) => `${f1(v)} dB`, yLabel: 'Loudness', curve: s && s.curve });
+    chart($('landing'), { y: (st) => st.lands_ms, yFormat: (v) => `${Math.round(v)} ms`, yLabel: 'Landing time', curve: s && s.landing });
+  }
+
+  let commentTimer;
+  const saveKeyFlags = () => post({ damped: $('flag-damped').checked, bounces: $('flag-bounces').checked,
+    comment: $('flag-comment').value.trim() });
+  $('flag-damped').addEventListener('change', saveKeyFlags);
+  $('flag-bounces').addEventListener('change', saveKeyFlags);
+  $('flag-comment').addEventListener('input', () => { clearTimeout(commentTimer); commentTimer = setTimeout(saveKeyFlags, 600); });
+
+  const step = (by) => {
+    const keys = state.data.keys, i = keys.indexOf(state.key);
+    load(keys[Math.max(0, Math.min(keys.length - 1, i + by))]);
+  };
+  $('prev').addEventListener('click', () => step(-1));
+  $('next').addEventListener('click', () => step(1));
+  $('key-select').addEventListener('change', (e) => load(+e.target.value));
+  document.addEventListener('keydown', (e) => {
+    if (e.target.matches('input, select, textarea')) return;
+    if (e.key === 'ArrowLeft') step(-1);
+    else if (e.key === 'ArrowRight') step(1);
+    else if (e.key === ' ' && state.playing != null) { e.preventDefault(); state.audio.currentTime = 0; state.audio.play(); }
+  });
+  let resize;
+  window.addEventListener('resize', () => { clearTimeout(resize); resize = setTimeout(() => state.data && drawCharts(), 150); });
+
+  let start = 0;
+  try { start = +(localStorage.getItem('review-key') || 0); } catch (e) { /* storage unavailable */ }
+  load(start).then(() => { if (state.key == null) load(0); });
+})();
+</script>
+</body>
+</html>

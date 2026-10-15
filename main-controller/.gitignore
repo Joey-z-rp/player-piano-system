@@ -3,3 +3,7 @@
 .vscode/c_cpp_properties.json
 .vscode/launch.json
 .vscode/ipch
+
+# Calibration recordings: large, kept locally (see tools/calibrate_dynamics.py)
+calibration/recordings/
+calibration/envelopes/

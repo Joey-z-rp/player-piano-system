@@ -5,10 +5,35 @@
 // Global UART handle
 UART_HandleTypeDef huart3;
 
-// Receive buffer and state
-static char rx_buffer[RS485_RX_BUFFER_SIZE];
-static uint16_t rx_index = 0;
+// The receive interrupt stores each byte in this ring (it only moves head);
+// RS485_Poll, in the main loop, reads it (it only moves tail) and assembles
+// lines. LINE_LOST in the ring means bytes were lost: the line it's in is
+// thrown away rather than read short (a cut-off "P:89:100" would still parse).
+#define LINE_LOST 0x00
+static volatile uint8_t ring[RS485_RING_SIZE];
+static volatile uint16_t ring_head = 0;
+static volatile uint16_t ring_tail = 0;
+static volatile uint8_t ring_overflowed = 0;
+static uint8_t rx_byte;
+
+static char line[RS485_RX_BUFFER_SIZE];
+static uint16_t line_length = 0;
+static uint8_t line_lost = 0; // discard up to the next end of line
 static RS485_MessageCallback_t message_callback = NULL;
+
+// Interrupt side: store one byte, or remember that one was lost.
+static void RingPut(uint8_t byte)
+{
+  uint16_t next = (uint16_t)((ring_head + 1) % RS485_RING_SIZE);
+  if (next == ring_tail)
+  {
+    ring_overflowed = 1;
+    return;
+  }
+  ring[ring_head] = byte;
+  __DMB(); // the byte is written before the main loop can see it
+  ring_head = next;
+}
 
 /**
  * @brief Initialize RS485 module
@@ -31,7 +56,7 @@ HAL_StatusTypeDef RS485_Init(void)
  */
 HAL_StatusTypeDef RS485_StartReceive(void)
 {
-  return HAL_UART_Receive_IT(&huart3, (uint8_t *)rx_buffer, 1);
+  return HAL_UART_Receive_IT(&huart3, &rx_byte, 1);
 }
 
 /**
@@ -90,53 +115,69 @@ void USART3_IRQHandler(void)
 
 /**
  * @brief UART error callback. An overrun (a byte arriving before the last
- * was read) makes the HAL stop receiving; restart it, dropping the partial
- * message, or the driver would ignore every command until reset. Errors that
- * leave reception running (noise, framing) need nothing: the garbled line
- * fails to parse.
+ * was read) makes the HAL stop receiving: restart it, and mark the line lost.
+ * Errors that leave reception running (noise, framing) need nothing: the
+ * garbled line fails to parse.
  */
 void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
 {
   if (huart->Instance == RS485_UART_INSTANCE && huart->RxState == HAL_UART_STATE_READY)
   {
     __HAL_UART_CLEAR_OREFLAG(huart);
-    rx_index = 0;
-    HAL_UART_Receive_IT(&huart3, (uint8_t *)rx_buffer, 1);
+    RingPut(LINE_LOST);
+    HAL_UART_Receive_IT(&huart3, &rx_byte, 1);
   }
 }
 
 /**
- * @brief UART receive complete callback
+ * @brief UART receive complete callback: store the byte, receive the next.
  */
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 {
   if (huart->Instance == RS485_UART_INSTANCE)
   {
-    // Check for end of message
-    if (rx_buffer[rx_index] == '\n' || rx_buffer[rx_index] == '\r')
+    RingPut(rx_byte);
+    HAL_UART_Receive_IT(&huart3, &rx_byte, 1);
+  }
+}
+
+void RS485_Poll(void)
+{
+  while (ring_tail != ring_head)
+  {
+    __DMB(); // read the byte only after seeing it was stored
+    uint8_t byte = ring[ring_tail];
+    ring_tail = (uint16_t)((ring_tail + 1) % RS485_RING_SIZE);
+
+    if (byte == LINE_LOST)
     {
-      rx_buffer[rx_index] = '\0';
-
-      // Call callback if set
-      if (message_callback != NULL)
+      line_lost = 1;
+    }
+    else if (byte == '\n' || byte == '\r')
+    {
+      if (!line_lost && line_length > 0 && message_callback != NULL)
       {
-        message_callback(rx_buffer, rx_index);
+        line[line_length] = '\0';
+        message_callback(line, line_length);
       }
-
-      // Reset for next message
-      rx_index = 0;
+      line_length = 0;
+      line_lost = 0;
+    }
+    else if (line_length < RS485_RX_BUFFER_SIZE - 1)
+    {
+      line[line_length++] = (char)byte;
     }
     else
     {
-      rx_index++;
-      if (rx_index >= RS485_RX_BUFFER_SIZE - 1)
-      {
-        // Buffer overflow, reset
-        rx_index = 0;
-      }
+      line_lost = 1; // too long to be a command
     }
-
-    // Restart reception
-    HAL_UART_Receive_IT(&huart3, (uint8_t *)&rx_buffer[rx_index], 1);
+  }
+  // Bytes lost to a full ring came after everything read above: the line
+  // being assembled is missing some (and so may the next, if a line end was
+  // among them), so drop it.
+  if (ring_overflowed)
+  {
+    ring_overflowed = 0;
+    line_lost = 1;
   }
 }

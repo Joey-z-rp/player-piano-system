@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Listening tests for the velocity table.
 
-Plays notes through the controller with the duties from a velocity table, so
-you can judge by ear what the measurements say. Each note is printed as it
-plays, so you can note which one sounded wrong. Ctrl-C stops and releases
-every key.
+Plays notes through the controller as it plays them from a velocity table
+(the duty, coast and hold for each key and velocity; see PianoController::
+sendPress), so you can judge by ear what the measurements say. Each note is
+printed with the command sent, so you can note which one sounded wrong.
+Ctrl-C stops and releases every key.
 
   scale       every key at one velocity: do any stick out?
   neighbours  a key and its neighbours in turn: is a difference real?
@@ -15,10 +16,17 @@ every key.
 
 Settings live in the SETTINGS block below; any of them can be overridden for
 one run on the command line (see --help on each command). The connection
-(CONNECTION, SERIAL_PORT, HOST) comes from calibrate_dynamics.py's settings.
+(CONNECTION, SERIAL_PORT, HOST) comes from calibration_common.py's settings.
+
+How each note is driven comes from the table's "drive" and each key's own
+settings (calibrate_dynamics.py's STRIKE_MS, COAST_OFFSET_MS, CLAMP_MS, ...).
+To try other values without rebuilding the table, --coast-offset-ms,
+--clamp-offset-ms, --clamp-ms, --clamp-duty and --hold override them for one
+run; with --above, only on strikes above that duty (the table's below).
 
 Examples:
   python3 tools/listen.py scale
+  python3 tools/listen.py crescendo 30 --clamp-ms 40 --clamp-offset-ms -15 --above 40
   python3 tools/listen.py neighbours 62 --duty 60
   python3 tools/listen.py scale --table data/alt.json   # a table made with `table --out data/alt.json`
 """
@@ -32,11 +40,11 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import calibrate_dynamics as cal  # noqa: E402  (connection, settings, key names)
+import calibration_common as common  # noqa: E402  (connection, settings, key names)
 
 # === SETTINGS ===============================================================
 
-TABLE = cal.TABLE_FILE  # the velocity table to play from
+TABLE = common.TABLE_FILE  # the velocity table to play from
 KEYS = "0-87"  # keys scale, softest and loudest go through, e.g. "36-60" or "30-40,50"
 INCLUDE_UNCALIBRATED = (
     False  # also play keys not in the table, with the default mapping
@@ -58,7 +66,7 @@ SOFTEST_REPEATS = 3  # strikes per key at velocity 1
 TIMING_MS = {
     "scale": (200, 250),
     "neighbours": (200, 250),
-    "crescendo": (200, 250),
+    "crescendo": (250, 450),
     "softest": (200, 250),
     "loudest": (200, 250),
 }
@@ -76,37 +84,80 @@ class Table:
         if not path.exists():
             sys.exit(f"{path} not found: run `calibrate_dynamics.py table` first")
         document = json.loads(path.read_text())
-        self.keys = {int(k): v["duty"] for k, v in document["keys"].items()}
+        self.entries = {int(k): v for k, v in document["keys"].items()}
+        self.keys = {k: v["duty"] for k, v in self.entries.items()}
+        self.shared_landing = document.get("landing_ms")
+        # Tables made before they carried it are played as the controller would: with its defaults.
+        self.drive = {**common.DEFAULT_DRIVE, **document.get("drive", {})}
+        self.overrides: dict = {}  # key entry field -> value, set from the command line
+        self.above: float | None = (
+            None  # the overrides apply only to strikes above this duty
+        )
         self.settings = document.get("settings", {})
-        print(f"Table {path.name} ({len(self.keys)} keys; settings {self.settings})")
+        landing = (
+            "with landing times"
+            if self.shared_landing
+            or any("landing_ms" in v for v in self.entries.values())
+            else "no landing times, so plain presses"
+        )
+        print(
+            f"Table {path.name} ({len(self.keys)} keys, {landing}; settings {self.settings})"
+        )
 
     def duty(self, key: int, velocity: int) -> float:
         velocity = min(max(velocity, 1), 127)
         if key in self.keys:
             return self.keys[key][velocity - 1]
         # As the firmware works it out, in hundredths of a percent.
-        hundredths = DEFAULT_MIN_DUTY * 100 + (velocity - 1) * (DEFAULT_MAX_DUTY - DEFAULT_MIN_DUTY) * 100 // 126
+        hundredths = (
+            DEFAULT_MIN_DUTY * 100
+            + (velocity - 1) * (DEFAULT_MAX_DUTY - DEFAULT_MIN_DUTY) * 100 // 126
+        )
         return hundredths / 100
 
+    def command(self, key: int, velocity: int) -> str:
+        """The press the controller sends for this key and velocity, with any
+        command-line overrides."""
+        velocity = min(max(velocity, 1), 127)
+        entry = dict(self.entries.get(key, {}))
+        drive = self.drive
+        for name, value in self.overrides.items():
+            if self.above is None:
+                entry[name] = value
+                continue
+            # Keep what the table gives up to `above`, then the override.
+            current = entry.get(name, self.drive[common.KEY_DRIVE_FIELDS[name]])
+            steps = current if isinstance(current, list) else [[0, current]]
+            entry[name] = [step for step in steps if step[0] < self.above] + [
+                [self.above, value]
+            ]
+        landing_list = entry.get("landing_ms") or self.shared_landing
+        landing = landing_list[velocity - 1] if landing_list else None
+        return common.drive_command(
+            key, self.duty(key, velocity), landing, drive, entry
+        )
 
-def format_duty(duty: float) -> str:
-    """As the driver takes it: percent with up to two decimals, e.g. 32, 32.5, 32.25."""
-    return f"{duty:.2f}".rstrip("0").rstrip(".")
+
+format_duty = common.format_duty
 
 
 class Player:
     def __init__(self, args):
-        self.piano = cal.connect(args)
+        self.piano = common.connect(args)
         self.hold_s = args.hold_ms / 1000
         self.gap_s = args.gap_ms / 1000
         self.count = 0
 
-    def play(self, key: int, duty: float, label: str) -> None:
+    def play(
+        self, key: int, duty: float, label: str, command: str | None = None
+    ) -> None:
+        """Presses the key with `command`, or plainly at `duty` without one."""
+        command = command or f"P:{key}:{format_duty(duty)}"
         self.count += 1
         print(
-            f"  {self.count:3d}. key {key:2d} ({cal.note_name(key):>3s})  {label:14s} duty {format_duty(duty):>6s}%"
+            f"  {self.count:3d}. key {key:2d} ({common.note_name(key):>3s})  {label:14s} duty {format_duty(duty):>6s}%  {command}"
         )
-        self.piano.send(f"P:{key}:{format_duty(duty)}")
+        self.piano.send(command)
         time.sleep(self.hold_s)
         self.piano.send(f"R:{key}:0")
         time.sleep(self.gap_s)
@@ -116,7 +167,7 @@ class Player:
 
 
 def keys_in(args, table: Table) -> list[int]:
-    keys = cal.parse_keys(args.keys)
+    keys = common.parse_keys(args.keys)
     skipped = [k for k in keys if k not in table.keys]
     if skipped and not args.include_uncalibrated:
         print(
@@ -131,14 +182,19 @@ def scale(args, table: Table, player: Player) -> None:
         f"\nEvery key at velocity {args.velocity}. Listen for keys that stick out, too loud or too soft."
     )
     for key in keys_in(args, table):
-        player.play(key, table.duty(key, args.velocity), f"velocity {args.velocity}")
+        player.play(
+            key,
+            table.duty(key, args.velocity),
+            f"velocity {args.velocity}",
+            table.command(key, args.velocity),
+        )
 
 
 def neighbours(args, table: Table, player: Player) -> None:
     keys = [
         k
         for k in range(args.key - args.span, args.key + args.span + 1)
-        if 0 <= k < cal.PIANO_KEYS
+        if 0 <= k < common.PIANO_KEYS
     ]
     if args.duty is not None:
         print(
@@ -156,7 +212,10 @@ def neighbours(args, table: Table, player: Player) -> None:
                 player.play(key, args.duty, "raw duty")
             else:
                 player.play(
-                    key, table.duty(key, args.velocity), f"velocity {args.velocity}"
+                    key,
+                    table.duty(key, args.velocity),
+                    f"velocity {args.velocity}",
+                    table.command(key, args.velocity),
                 )
         player.pause(0.6)
 
@@ -168,11 +227,16 @@ def crescendo(args, table: Table, player: Player) -> None:
     if args.down:
         velocities += velocities[-2::-1]
     print(
-        f"\nKey {args.key} ({cal.note_name(args.key)}) from velocity 1 to 127{' and back' if args.down else ''}. "
+        f"\nKey {args.key} ({common.note_name(args.key)}) from velocity 1 to 127{' and back' if args.down else ''}. "
         "Each step should sound a similar amount louder, with no jump at the soft end and no plateau at the top."
     )
     for velocity in velocities:
-        player.play(args.key, table.duty(args.key, velocity), f"velocity {velocity}")
+        player.play(
+            args.key,
+            table.duty(args.key, velocity),
+            f"velocity {velocity}",
+            table.command(args.key, velocity),
+        )
 
 
 def softest(args, table: Table, player: Player) -> None:
@@ -182,7 +246,7 @@ def softest(args, table: Table, player: Player) -> None:
     )
     for key in keys_in(args, table):
         for _ in range(args.repeats):
-            player.play(key, table.duty(key, 1), "velocity 1")
+            player.play(key, table.duty(key, 1), "velocity 1", table.command(key, 1))
         player.pause(0.3)
 
 
@@ -192,7 +256,7 @@ def loudest(args, table: Table, player: Player) -> None:
         "(the hammer hitting the string twice)."
     )
     for key in keys_in(args, table):
-        player.play(key, table.duty(key, 127), "velocity 127")
+        player.play(key, table.duty(key, 127), "velocity 127", table.command(key, 127))
 
 
 def main() -> None:
@@ -201,7 +265,7 @@ def main() -> None:
     )
     commands = parser.add_subparsers(dest="command", required=True)
 
-    def common(p, test):
+    def add_common(p, test):
         hold_ms, gap_ms = TIMING_MS[test]
         p.add_argument(
             "--table", type=Path, default=TABLE, help="velocity table to play from"
@@ -212,9 +276,29 @@ def main() -> None:
         p.add_argument(
             "--gap-ms", type=int, default=gap_ms, help="silence after each note"
         )
-        p.add_argument("--connection", choices=["usb", "wifi"], default=cal.CONNECTION)
-        p.add_argument("--port", default=cal.SERIAL_PORT)
-        p.add_argument("--host", default=cal.HOST)
+        p.add_argument(
+            "--coast-offset-ms",
+            type=float,
+            help="when the hold starts without a clamp, from the landing",
+        )
+        p.add_argument(
+            "--clamp-offset-ms",
+            type=float,
+            help="when the clamp starts, from the landing",
+        )
+        p.add_argument("--clamp-ms", type=float, help="clamp length (0 = no clamp)")
+        p.add_argument("--clamp-duty", type=float, help="clamp duty")
+        p.add_argument("--hold", type=float, help="hold duty")
+        p.add_argument(
+            "--above",
+            type=float,
+            help="apply the overrides above only to strikes above this duty",
+        )
+        p.add_argument(
+            "--connection", choices=["usb", "wifi"], default=common.CONNECTION
+        )
+        p.add_argument("--port", default=common.SERIAL_PORT)
+        p.add_argument("--host", default=common.HOST)
 
     def key_range(p):
         p.add_argument("--keys", default=KEYS, help="e.g. 0-87, 36-60 or 30-40,50")
@@ -226,13 +310,13 @@ def main() -> None:
         )
 
     p = commands.add_parser("scale", help="every key at one velocity")
-    common(p, "scale")
+    add_common(p, "scale")
     key_range(p)
     p.add_argument("--velocity", type=int, default=VELOCITY)
     p.set_defaults(run=scale)
 
     p = commands.add_parser("neighbours", help="a key and its neighbours in turn")
-    common(p, "neighbours")
+    add_common(p, "neighbours")
     p.add_argument("key", type=int, nargs="?", default=NEIGHBOURS_KEY)
     p.add_argument(
         "--span", type=int, default=NEIGHBOURS_SPAN, help="neighbours on each side"
@@ -248,7 +332,7 @@ def main() -> None:
     p.set_defaults(run=neighbours)
 
     p = commands.add_parser("crescendo", help="one key from velocity 1 to 127")
-    common(p, "crescendo")
+    add_common(p, "crescendo")
     p.add_argument("key", type=int, nargs="?", default=CRESCENDO_KEY)
     p.add_argument("--step", type=int, default=CRESCENDO_STEP, help="velocity step")
     p.add_argument(
@@ -257,19 +341,19 @@ def main() -> None:
     p.set_defaults(run=crescendo)
 
     p = commands.add_parser("softest", help="every key at velocity 1, a few times")
-    common(p, "softest")
+    add_common(p, "softest")
     key_range(p)
     p.add_argument("--repeats", type=int, default=SOFTEST_REPEATS)
     p.set_defaults(run=softest)
 
     p = commands.add_parser("loudest", help="every key at velocity 127")
-    common(p, "loudest")
+    add_common(p, "loudest")
     key_range(p)
     p.set_defaults(run=loudest)
 
     args = parser.parse_args()
     for name in ("key",):
-        if hasattr(args, name) and not 0 <= getattr(args, name) < cal.PIANO_KEYS:
+        if hasattr(args, name) and not 0 <= getattr(args, name) < common.PIANO_KEYS:
             sys.exit("key must be 0-87")
     if getattr(args, "duty", None) is not None and not 0 <= args.duty <= 100:
         sys.exit("duty must be 0-100")
@@ -277,6 +361,27 @@ def main() -> None:
         sys.exit("velocity must be 1-127")
 
     table = Table(args.table)
+    table.overrides = {
+        name: value
+        for name, value in (
+            ("coast_offset_ms", args.coast_offset_ms),
+            ("clamp_offset_ms", args.clamp_offset_ms),
+            ("clamp_ms", args.clamp_ms),
+            ("clamp_duty", args.clamp_duty),
+            ("hold", args.hold),
+        )
+        if value is not None
+    }
+    table.above = args.above
+    print(
+        f"Drive: {table.drive}"
+        + (f"; overridden: {table.overrides}" if table.overrides else "")
+        + (
+            f" above {args.above}%"
+            if table.overrides and args.above is not None
+            else ""
+        )
+    )
     player = Player(args)
     try:
         args.run(args, table, player)
