@@ -263,7 +263,7 @@ void test_keys_use_the_drive_defaults_without_their_own()
   std::string error;
   TEST_ASSERT_TRUE(load(table, tableJson({40}), error));
   TEST_ASSERT_EQUAL_UINT16(2000, table.coastDuty(40));
-  TEST_ASSERT_EQUAL_INT32(30, table.setting(40, KeySetting::CoastOffsetMs, 5000));
+  TEST_ASSERT_EQUAL_INT32(10, table.setting(40, KeySetting::CoastOffsetMs, 5000));
   TEST_ASSERT_EQUAL_INT32(0, table.setting(40, KeySetting::ClampMs, 5000)); // no clamp
   TEST_ASSERT_EQUAL_UINT16(2500, table.holdDuty(40, 5000));
   TEST_ASSERT_EQUAL_UINT16(2500, table.holdDuty(200, 5000)); // not a key
@@ -345,8 +345,8 @@ void test_press_without_landing_times_is_plain()
 
 void test_press_coasts_until_the_hold_is_due()
 {
-  // Lands at 100 ms; the hold is due 30 ms later, so 80 ms of coast after the 50 ms strike.
-  TEST_ASSERT_EQUAL_STRING("P:40:40:50:20:80:25", press(pressTable(100)).c_str());
+  // Lands at 100 ms; the hold is due 10 ms later, so 60 ms of coast after the 50 ms strike.
+  TEST_ASSERT_EQUAL_STRING("P:40:40:50:20:60:25", press(pressTable(100)).c_str());
 }
 
 void test_press_can_start_the_hold_before_landing()
@@ -381,7 +381,7 @@ void test_clamp_steps_follow_the_strike_duty()
   TEST_ASSERT_EQUAL_STRING("P:40:40:50:20:35:60:40:25",
                            press(pressTable(100, above, "\"drive\":{\"clamp_offset_ms\":-15}")).c_str());
   std::string higher = "\"clamp_ms\":[[0,0],[45,40]]";
-  TEST_ASSERT_EQUAL_STRING("P:40:40:50:20:80:25", press(pressTable(100, higher)).c_str()); // 40% isn't above 45
+  TEST_ASSERT_EQUAL_STRING("P:40:40:50:20:60:25", press(pressTable(100, higher)).c_str()); // 40% isn't above 45
   VelocityTable table;
   std::string error;
   TEST_ASSERT_FALSE(load(table, pressTable(100, "\"clamp_ms\":[[45,40],[0,0]]"), error));

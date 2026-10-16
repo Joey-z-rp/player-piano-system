@@ -11,10 +11,13 @@ void registerStatusRoutes(AsyncWebServer &server, PianoController &piano)
     doc["freeHeap"] = ESP.getFreeHeap();
     doc["rssi"] = WiFi.RSSI();
     doc["pendingCommands"] = piano.pendingCommands();
+    doc["volume"] = piano.volume();
 
     PlaybackStatus playback = piano.status();
     JsonObject playbackJson = doc["playback"].to<JsonObject>();
-    playbackJson["state"] = playback.state == PlaybackState::Playing ? "playing" : "idle";
+    playbackJson["state"] = playback.state == PlaybackState::Playing  ? "playing"
+                            : playback.state == PlaybackState::Paused ? "paused"
+                                                                      : "idle";
     playbackJson["positionMs"] = playback.positionMs;
     if (playback.roll != nullptr)
     {

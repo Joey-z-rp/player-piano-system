@@ -3,10 +3,12 @@
 
 #include <Arduino.h>
 #include <atomic>
+#include <bitset>
 #include <memory>
 #include <mutex>
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
+#include <vector>
 #include "app/piano/piano_roll.h"
 
 class Rs485Module;
@@ -22,10 +24,20 @@ static const size_t DRIVER_COMMAND_QUEUE_LENGTH = 32;
 static const uint8_t SUSTAIN_PEDAL_CHANNELS[] = {88, 89};
 static const char SUSTAIN_PEDAL_PRESS[] = "100:30:100:30:55";
 static const char SUSTAIN_PEDAL_RELEASE[] = "40:40:30:40:0";
+// Starting part way through with the pedal down, it's pressed first and
+// given this long to go down before the first note.
+static const uint32_t PEDAL_SETTLE_MS = 100;
 
 // Key presses are driven as the velocity table's DriveSettings say (see
 // sendPress). Without landing times, presses use the drivers' defaults (a
 // 50 ms strike, then 20% until the release).
+
+// Volume: every note's velocity is scaled by this percent, within these
+// limits. A change applies from the next play: a loaded piece is rebuilt for
+// it then, so its notes stay timed to how its hammers land.
+static const uint16_t MIN_VOLUME = 10;
+static const uint16_t MAX_VOLUME = 200;
+static const uint16_t DEFAULT_VOLUME = 100;
 
 // Before each song, and on request, the driver boards are restarted and given
 // this long to come back, so a driver stuck in a bad state can't carry it
@@ -45,13 +57,15 @@ enum class PlaybackResult
   Ok,
   Busy,
   NoRoll,
+  NotPlaying,
   QueueFull
 };
 
 enum class PlaybackState : uint8_t
 {
   Idle,
-  Playing
+  Playing,
+  Paused // every key up; Play goes on from there
 };
 
 struct PlaybackStatus
@@ -74,7 +88,14 @@ public:
   // Safe to call from any task.
   SubmitResult submitDriverCommand(const String &command);
   PlaybackResult loadRoll(std::shared_ptr<const PianoRoll> roll);
-  PlaybackResult play();
+  // Plays the loaded piece from fromMs on its timeline (see findRollStart).
+  // CONTINUE plays from the start, or where it was paused. Going on from a
+  // pause rebuilds the piece if the volume has changed.
+  static const uint32_t CONTINUE = UINT32_MAX;
+  PlaybackResult play(uint32_t fromMs = CONTINUE);
+  PlaybackResult pause();
+  // Jumps the playing or paused piece to toMs.
+  PlaybackResult seek(uint32_t toMs);
   PlaybackResult stop();
   // Stops any song and restarts every driver board, which lets every key go.
   PlaybackResult resetDrivers();
@@ -82,6 +103,9 @@ public:
   PlaybackResult setPedal(bool down);
   PlaybackStatus status() const;
   size_t pendingCommands() const;
+  // Saved, so it survives a restart. Returns false if out of range.
+  bool setVolume(uint16_t percent);
+  uint16_t volume() const;
   // For building rolls timed to how this piano's hammers land.
   const VelocityTable *velocities() const;
 
@@ -92,6 +116,8 @@ private:
   {
     DriverCommand,
     Play,
+    Pause,
+    Seek,
     Stop,
     ResetDrivers,
     PedalDown,
@@ -101,6 +127,7 @@ private:
   struct Message
   {
     MessageType type;
+    uint32_t timeMs; // Play and Seek
     char text[DRIVER_COMMAND_MAX_LENGTH + 1];
   };
 
@@ -108,7 +135,10 @@ private:
   bool post(const Message &message);
   void run();
   void handleMessage(const Message &message);
-  void startPlayback();
+  void startPlayback(uint32_t fromMs);
+  void resumePlayback(uint32_t fromMs);
+  void playFrom(uint32_t fromMs);
+  void rebuildForVolume();
   void playDueEvents();
   void finishPlayback();
   void sendRollEvent(const RollEvent &event);
@@ -125,12 +155,17 @@ private:
   mutable std::mutex rollMutex;
   std::shared_ptr<const PianoRoll> loadedRoll;
   std::atomic<PlaybackState> state;
+  std::atomic<uint16_t> volumePercent;
   std::atomic<uint32_t> playStartMs;
+  std::atomic<uint32_t> pausedAtMs;
 
   // Owned by the player task.
   std::shared_ptr<const PianoRoll> playingRoll;
   size_t nextEvent;
   int64_t startUs;
+  std::bitset<PIANO_KEY_COUNT> skipReleases; // see RollStart
+  std::vector<size_t> skippedPresses;
+  size_t nextSkipped;
 };
 
 #endif // PIANO_CONTROLLER_H

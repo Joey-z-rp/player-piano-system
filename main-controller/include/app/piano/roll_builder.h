@@ -1,6 +1,7 @@
 #ifndef ROLL_BUILDER_H
 #define ROLL_BUILDER_H
 
+#include <bitset>
 #include "app/midi/midi_parser.h"
 #include "app/piano/piano_roll.h"
 
@@ -13,8 +14,65 @@ class VelocityTable;
 // separateRepeats). Sustain pedal changes are spaced so the pedal solenoids
 // can keep up (see spacePedal). With a velocity table that has landing times,
 // each press is sent early by its hammer's landing time, so soft and loud
-// notes sound when the MIDI says (see allowForLanding). Returns false if it
-// runs out of memory.
-bool buildPianoRoll(const std::vector<MidiEvent> &events, PianoRoll &roll, const VelocityTable *timing = nullptr);
+// notes sound when the MIDI says (see allowForLanding). Every velocity is
+// scaled by volume percent first (clamped to 1-127). With a report, it also
+// says what became of every note and the pedal. Returns false if it runs out
+// of memory.
+// What became of each written note, for showing what the builder changed.
+enum NoteChange : uint8_t
+{
+  NOTE_MERGED = 1,           // a repeat too soon to strike again (or a note doubled at another velocity): not struck
+  NOTE_ABSORBED = 2,         // a strike that repeats were merged into: held longer, or louder (and re-timed), for them
+  NOTE_SHORTENED = 4,        // released early, so the key can reset before its next strike
+  NOTE_LENGTHENED = 8,       // held on until its hammer has landed
+  NOTE_VELOCITY_LIMITED = 16, // the volume took it past 1-127
+  NOTE_DUPLICATE = 32         // the same note again at the same moment and velocity: played once
+};
+
+struct NoteReport
+{
+  uint32_t onMs;          // as written, on the MIDI's timeline
+  uint32_t writtenOffMs;  // as written
+  uint32_t playedOnMs;    // when it sounds, on the same timeline; 0 if merged
+  uint32_t playedOffMs;   // when the key is released, on the same timeline; 0 if merged
+  uint32_t mergedIntoMs;  // merged: the onMs of the strike it's held in
+  uint8_t key;            // 0-87
+  uint8_t writtenVelocity;
+  uint8_t playedVelocity; // after the volume and any merges; 0 if merged
+  uint8_t changes;        // NoteChange flags
+};
+
+struct PedalSpan
+{
+  uint32_t downMs; // on the MIDI's timeline
+  uint32_t upMs;
+};
+
+struct RollReport
+{
+  std::vector<NoteReport> notes; // in written order
+  std::vector<PedalSpan> writtenPedal;
+  std::vector<PedalSpan> playedPedal; // after spacing, on the MIDI's timeline
+};
+
+bool buildPianoRoll(const std::vector<MidiEvent> &events, PianoRoll &roll, const VelocityTable *timing = nullptr,
+                    uint16_t volume = 100, RollReport *report = nullptr);
+
+// Where to pick up a roll part way through, so the notes that sound from
+// fromMs on its timeline play. The clock starts the roll's lead earlier, so
+// their presses are sent in time; presses in that lead whose notes sound
+// before fromMs (by timing's landing times) are skipped, so resuming from a
+// pause doesn't strike them twice. Notes already held aren't struck (a hammer
+// can't start a note half way through), so their releases are skipped too;
+// the pedal is pressed first if it's down at the start.
+struct RollStart
+{
+  size_t index;                              // first event to play
+  uint32_t timeMs;                           // the roll time the clock starts at
+  bool pedalDown;                            // the pedal is down at that time
+  std::bitset<PIANO_KEY_COUNT> skipReleases; // keys whose next release isn't played
+  std::vector<size_t> skippedPresses;        // indexes of presses not played, in order
+};
+RollStart findRollStart(const PianoRoll &roll, uint32_t fromMs, const VelocityTable *timing = nullptr);
 
 #endif // ROLL_BUILDER_H

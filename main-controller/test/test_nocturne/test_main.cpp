@@ -14,11 +14,11 @@ static const size_t NOTE_OFFS = 1298;
 static const size_t SUSTAIN_MESSAGES = 268;
 static const size_t PEDAL_CHANGES = 228;
 static const uint32_t LAST_EVENT_MS = 240637;
-static const uint32_t RESTRIKES_UNDER_120_MS = 2;
+static const uint32_t RESTRIKES_UNDER_115_MS = 1; // the piece repeats one note 100 ms apart (and one 119 ms)
 
 // The hardware limits the roll builder must respect.
-static const uint32_t MIN_NOTE_MS = 40;
-static const uint32_t RESTRIKE_GAP_MS = 80;
+static const uint32_t MIN_NOTE_MS = 15;
+static const uint32_t RESTRIKE_GAP_MS = 100;
 static const uint32_t PEDAL_MIN_MS = 100;
 
 static std::vector<uint8_t> file;
@@ -95,7 +95,7 @@ void test_parser_reads_every_event()
 void test_roll_accounts_for_every_note()
 {
   TEST_ASSERT_EQUAL_UINT32(0, roll.skippedNotes);
-  TEST_ASSERT_EQUAL_UINT32(RESTRIKES_UNDER_120_MS, roll.mergedNotes);
+  TEST_ASSERT_EQUAL_UINT32(RESTRIKES_UNDER_115_MS, roll.mergedNotes);
   TEST_ASSERT_EQUAL_UINT32(NOTE_ONS, roll.noteCount + roll.mergedNotes);
   TEST_ASSERT_UINT32_WITHIN(MIN_NOTE_MS, LAST_EVENT_MS, roll.durationMs);
 }
@@ -247,6 +247,45 @@ void test_pedal_alternates_and_is_spaced()
   TEST_ASSERT_TRUE(changes > 0 && changes <= PEDAL_CHANGES);
 }
 
+// The report the play page shows agrees with the roll that's played.
+void test_report_matches_the_timed_roll()
+{
+  TEST_ASSERT_TRUE(built);
+  PianoRoll again;
+  RollReport report;
+  TEST_ASSERT_TRUE(buildPianoRoll(events, again, &timing, 100, &report));
+  TEST_ASSERT_EQUAL(timedRoll.events.size(), again.events.size());
+  TEST_ASSERT_EQUAL(NOTE_ONS, report.notes.size());
+  size_t merged = 0, struck = 0;
+  for (size_t i = 0; i < report.notes.size(); i++)
+  {
+    const NoteReport &note = report.notes[i];
+    if (i > 0)
+    {
+      TEST_ASSERT_TRUE(note.onMs >= report.notes[i - 1].onMs);
+    }
+    if (note.changes & NOTE_MERGED)
+    {
+      merged++;
+      TEST_ASSERT_EQUAL(0, note.playedVelocity);
+    }
+    else
+    {
+      struck++;
+      TEST_ASSERT_TRUE(note.playedOffMs > note.onMs);
+    }
+  }
+  TEST_ASSERT_EQUAL(timedRoll.mergedNotes, merged);
+  TEST_ASSERT_EQUAL(timedRoll.noteCount, struck);
+  // The played pedal spans match the roll's pedal changes.
+  size_t changes = 0;
+  for (const RollEvent &event : timedRoll.events)
+  {
+    changes += event.type == RollEventType::SustainOn || event.type == RollEventType::SustainOff;
+  }
+  TEST_ASSERT_EQUAL((changes + 1) / 2, report.playedPedal.size());
+}
+
 int main()
 {
   loaded = loadFixture();
@@ -260,5 +299,6 @@ int main()
   RUN_TEST(test_every_key_is_released_and_rested_before_striking_again);
   RUN_TEST(test_timed_roll_holds_each_key_until_its_hammer_lands);
   RUN_TEST(test_pedal_alternates_and_is_spaced);
+  RUN_TEST(test_report_matches_the_timed_roll);
   return UNITY_END();
 }

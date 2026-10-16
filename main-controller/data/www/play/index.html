@@ -5,6 +5,31 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Play</title>
 <link rel="stylesheet" href="/assets/style.css">
+<style>
+  #progress { width: min(32rem, 100%); vertical-align: middle; }
+  .notes { width: min(calc(100vw - 48px), 72rem); }
+  .notes[hidden] { display: none; }
+  .swatch.ramp { width: 48px; background: linear-gradient(to right, #dce9fb, #93bdf2, #3d86dc, #1b4f9c, #0b2552); }
+  .notes canvas { display: block; width: 100%; cursor: pointer; touch-action: pan-y; }
+  .notes .tools { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 6px 0; }
+  .notes .tools .gap { margin-left: 12px; }
+  .swatch.changed { background: #e07b28; }
+  .swatch.merged { background: #d03b3b40; border: 1.5px solid #d03b3b; }
+  #notes-tip { white-space: pre-line; width: max-content; max-width: 22rem; }
+  .change-text { font-size: 14px; min-height: 1.5em; margin: 4px 0; }
+  .velocities { margin: 4px 0 0; }
+  .velocities[hidden] { display: none; }
+  .chart { position: relative; }
+  .chart svg { display: block; width: 100%; overflow: visible; }
+  .legend { display: flex; gap: 16px; font-size: 13px; color: #5f5e5a; margin: 4px 0; }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .swatch { width: 12px; height: 10px; display: inline-block; box-sizing: border-box; }
+  .swatch.played { background: #2a78d6; }
+  .swatch.written { border: 1.5px solid #8a8984; }
+  .tick { font-size: 11px; fill: #5f5e5a; }
+  .tip { position: absolute; pointer-events: none; background: #fff; border: 1px solid #e1e0d9; border-radius: 6px;
+    padding: 3px 8px; font-size: 12px; white-space: nowrap; box-shadow: 0 2px 8px rgba(0, 0, 0, .12); }
+</style>
 </head>
 <body>
 <h1>Play</h1>
@@ -12,10 +37,43 @@
 <p id="piece">No piece loaded</p>
 <p>
   <button id="play" disabled>Play</button>
+  <button id="pause" disabled>Pause</button>
   <button id="stop" disabled>Stop</button>
 </p>
-<p><progress id="progress" value="0" max="1"></progress> <span id="time"></span></p>
+<p><input id="progress" type="range" min="0" max="1" value="0" step="100" aria-label="Position" disabled> <span id="time"></span></p>
+<section class="notes" id="notes" hidden>
+  <div class="legend">
+    <span>played, velocity 1 <i class="swatch ramp"></i> 127</span>
+    <span><i class="swatch written"></i>as written</span>
+    <span><i class="swatch changed"></i>changed</span>
+    <span><i class="swatch merged"></i>merged (not struck)</span>
+  </div>
+  <div class="chart"><canvas id="notes-canvas"></canvas><div class="tip" id="notes-tip" hidden></div></div>
+  <div class="tools">
+    <button id="zoom-out" aria-label="Zoom out">−</button>
+    <button id="zoom-in" aria-label="Zoom in">+</button>
+    <label class="gap" for="change-kind">Changes</label>
+    <select id="change-kind"></select>
+    <button id="change-prev" aria-label="Previous change">◀</button>
+    <button id="change-next" aria-label="Next change">▶</button>
+  </div>
+  <p class="change-text" id="change-text"></p>
+</section>
+<p>
+  <label for="volume">Volume</label>
+  <input id="volume" type="range" min="10" max="200" step="5" value="100">
+  <output id="volume-value" for="volume">100%</output>
+  <span id="volume-note"></span>
+</p>
+<section class="velocities" id="velocities" hidden>
+  <div class="legend">
+    <span><i class="swatch played"></i>at this volume</span>
+    <span><i class="swatch written"></i>as written</span>
+  </div>
+  <div class="chart" id="velocity-chart"></div>
+</section>
 <p id="message"></p>
+<script src="/play/notes.js"></script>
 <script src="/play/app.js"></script>
 </body>
 </html>
