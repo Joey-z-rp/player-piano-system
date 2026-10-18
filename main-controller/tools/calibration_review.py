@@ -13,7 +13,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from calibration_analysis import build_mapping  # noqa: E402
 from calibration_common import note_name  # noqa: E402
-from calibration_data import group_rows, load_flags, load_raw, reanalyse  # noqa: E402
+from calibration_data import drop_thumps, group_rows, load_flags, load_raw, reanalyse  # noqa: E402
 
 
 def review(args) -> None:
@@ -28,11 +28,13 @@ def review(args) -> None:
 
     rows = load_raw(args.raw)
     print("Analysing the recordings (about a minute)...", flush=True)
-    reanalyse(rows, args.recordings, args.margin_db)
+    reanalyse(rows, args.recordings, args.margin_db, args.pedal)
     state = {"flags": load_flags(args.flags)}
 
     def regroup() -> None:
         state["by_key"] = group_rows(rows, state["flags"], args.cfg.IGNORE_FIRST_STRIKE)
+        # With the pedal down, notes too early to be notes (see drop_thumps).
+        state["thumps"] = drop_thumps(state["by_key"], state["flags"]) if args.pedal else set()
         state["mapping"] = build_mapping(state["by_key"], args, state["flags"])
 
     regroup()
@@ -54,7 +56,8 @@ def review(args) -> None:
             "flags": state["flags"]["keys"].get(str(key), {}),
             "strikes": [
                 {
-                    "repeat": r["repeat"], "duty": r["duty"], "result": r.get("result", "hit" if r["hit"] else "silent"),
+                    "repeat": r["repeat"], "duty": r["duty"],
+                    "result": "thump" if (key, r["repeat"]) in state["thumps"] else r.get("result", "hit" if r["hit"] else "silent"),
                     "verdict": strikes.get(f"{key}:{r['repeat']}"), "peak_db": round(r["peak_db"], 2),
                     "lands_ms": r["lands_ms"], "decay_db": None if np.isnan(r["decay_db"]) else round(r["decay_db"], 1),
                     "bounce": r["bounce"], "ignored": args.cfg.IGNORE_FIRST_STRIKE and r["repeat"] == first[key],

@@ -17,6 +17,7 @@ from calibration_common import (  # noqa: E402
     MAX_QUIET_WAIT_S,
     PRE_ROLL_MS,
     QUIET_DB,
+    set_pedal,
     TAIL_MS,
     Connection,
     Recorder,
@@ -73,7 +74,11 @@ def measure(args) -> None:
     starts = {}
     if args.from_table and args.table.exists():
         table_keys = json.loads(args.table.read_text())["keys"]
-        starts = {int(k): float(v["min"]) for k, v in table_keys.items() if "min" in v}
+        # With the pedal down a key starts lower: from its pedal entry, else searched for.
+        entries = {k: v.get("pedal", {}) if args.pedal else v for k, v in table_keys.items()}
+        starts = {int(k): float(v["min"]) for k, v in entries.items() if "min" in v}
+    if args.pedal:
+        print(f"With the sustain pedal down for every strike; saving to {args.raw} and {args.recordings}")
     searched = [key for key in todo if key not in starts]
     if searched:
         print(f"Searching live for where these keys start to play: {', '.join(map(str, searched))}")
@@ -98,12 +103,12 @@ def measure(args) -> None:
             )
 
 
-def press_command(key: int, duty: float, starts: float | None, cfg) -> str:
+def press_command(key: int, duty: float, starts: float | None, cfg, pedal: bool = False) -> str:
     """How to strike this key at this duty: as the controller plays it (see
     drive_command), taking the landing time as the latest the hammer should
     land (see LANDING_LIMIT) for a key that starts to play at `starts`.
     Without `starts`, at the coast duty all the way to the release."""
-    entry = key_drive(key, cfg)
+    entry = key_drive(key, cfg, pedal)
     if starts is None:
         return f"P:{key}:{format_duty(duty)}:{cfg.STRIKE_MS}:0:0:{format_duty(entry.get('coast', cfg.COAST_DUTY))}"
     above, latest = zip(*cfg.LANDING_LIMIT)
@@ -141,7 +146,7 @@ def measure_key(
     print(f"\n== key {key} ({note_name(key)}) ==")
 
     def strike(duty: float, label: str = "strike") -> dict:
-        press = press_command(key, duty, reference[0] if reference else None, cfg)
+        press = press_command(key, duty, reference[0] if reference else None, cfg, args.pedal)
         while True:
             waited, quiet = wait_until_quiet(
                 recorder, sos, room_db, args.quiet_db, args.max_quiet_wait
@@ -155,13 +160,19 @@ def measure_key(
                 print(
                     f"  duty {format_duty(duty):>5s}  waited {waited:.1f} s for the last note to die away"
                 )
-            recorded = record_press(timed, piano, press, f"R:{key}:0", args.hold_ms)
+            if args.pedal:
+                set_pedal(piano, True)  # waits until it's down and quiet again
+            try:
+                recorded = record_press(timed, piano, press, f"R:{key}:0", args.hold_ms)
+            finally:
+                if args.pedal:
+                    set_pedal(piano, False)  # the dampers stop the note, so the next wait is short
             if recorded is None:
                 print(
                     f"  duty {format_duty(duty):>5s}  network hiccup during this strike, doing it again"
                 )
                 continue
-            measured = analyse_strike(recorded[0], args.sample_rate, sos, args.margin_db, key)
+            measured = analyse_strike(recorded[0], args.sample_rate, sos, args.margin_db, key, args.pedal)
             # Something made a sound just before the strike (or the note never died away).
             if quiet and measured.noise_db > room_db + args.quiet_db + 3:
                 print(

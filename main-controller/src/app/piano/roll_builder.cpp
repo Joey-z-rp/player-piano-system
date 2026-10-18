@@ -10,6 +10,9 @@ namespace
   const uint32_t MIN_NOTE_MS = 10;      // shortest a key is held after its hammer lands
   const uint32_t RESTRIKE_GAP_MS = 70;  // release this long before striking the same key again
   const uint32_t PEDAL_MIN_MS = 100;    // shortest time between sustain pedal changes
+  // How long the pedal takes to lift the dampers fully after it's sent down
+  // (its press is 60 ms at full power), before a key counts as pedal-down.
+  const uint32_t PEDAL_SETTLE_MS = 100;
 
   bool isPianoNote(uint8_t note)
   {
@@ -29,6 +32,7 @@ namespace
     uint8_t writtenVelocity;
     uint8_t changes;       // NoteChange flags
     uint32_t mergedIntoMs; // merged notes: when the strike they're held in is written
+    bool pedal;            // the sustain pedal is down when it's written to sound
   };
 
   // A note-on at the same moment as another on its key, played as that one.
@@ -68,7 +72,7 @@ namespace
         if (soundingNote[key] != NO_NOTE && notes[soundingNote[key]].writtenOnMs == event.timeMs)
         {
           Note &first = notes[soundingNote[key]];
-          Note copy = {event.timeMs, UINT32_MAX, key, 0, 0, event.timeMs, 0, event.value, 0, event.timeMs};
+          Note copy = {event.timeMs, UINT32_MAX, key, 0, 0, event.timeMs, 0, event.value, 0, event.timeMs, false};
           if (event.value == first.writtenVelocity)
           {
             copy.changes = NOTE_DUPLICATE;
@@ -95,7 +99,7 @@ namespace
         {
           notes[soundingNote[key]].offMs = event.timeMs;
         }
-        notes.push_back({event.timeMs, UINT32_MAX, key, event.value, 0, event.timeMs, 0, event.value, 0, 0});
+        notes.push_back({event.timeMs, UINT32_MAX, key, event.value, 0, event.timeMs, 0, event.value, 0, 0, false});
         soundingNote[key] = notes.size() - 1;
         if (heldCount[key] < 255)
         {
@@ -129,7 +133,7 @@ namespace
         if (on != sustain)
         {
           sustain = on;
-          pedal.push_back({event.timeMs, on ? RollEventType::SustainOn : RollEventType::SustainOff, 0, 0});
+          pedal.push_back({event.timeMs, on ? RollEventType::SustainOn : RollEventType::SustainOff, 0, 0, false});
         }
         break;
       }
@@ -152,6 +156,26 @@ namespace
     }
   }
 
+  // Which notes play as pedal-down, from the velocity table's pedal entries
+  // (see VelocityTable): only those the dampers are surely up for through
+  // the key's whole travel. The pedal, as played, went down PEDAL_SETTLE_MS
+  // before the earliest the key could be pressed (its pedal-up press), and
+  // doesn't start lifting before the note sounds. In any doubt a note is
+  // pedal-up: a pedal-down duty played with the dampers still on the strings,
+  // or falling back, may not sound at all, while a pedal-up one at worst plays
+  // a little loud. Times as written, before the lead.
+  void markPedal(std::vector<Note> &notes, const std::vector<RollEvent> &pedal, const VelocityTable &timing)
+  {
+    for (Note &note : notes)
+    {
+      int64_t settledBy = (int64_t)note.onMs - timing.landingMs(note.key, note.velocity) - PEDAL_SETTLE_MS;
+      auto next = std::find_if(pedal.begin(), pedal.end(),
+                               [settledBy](const RollEvent &change) { return (int64_t)change.timeMs > settledBy; });
+      note.pedal = next != pedal.begin() && (next - 1)->type == RollEventType::SustainOn &&
+                   (next == pedal.end() || next->timeMs >= note.onMs);
+    }
+  }
+
   // The hammer lands well after the press: ~55 ms at full velocity, ~150 ms at
   // the softest. Everything is played a fixed lead later, and each press is sent
   // earlier by its landing time, so every note sounds lead ms after the MIDI
@@ -162,7 +186,7 @@ namespace
     uint32_t lead = timing.maxLandingMs();
     for (Note &note : notes)
     {
-      note.landingMs = timing.landingMs(note.key, note.velocity);
+      note.landingMs = timing.landingMs(note.key, note.velocity, note.pedal);
       note.onMs += lead - note.landingMs;
       note.offMs += lead;
     }
@@ -266,7 +290,7 @@ namespace
   //   time, so the old harmony is cleared, and the re-press waits.
   // - press then a quick release: too brief to matter, so both are dropped.
   // pedal alternates on/off, starting with on.
-  void spacePedal(const std::vector<RollEvent> &pedal, PianoRoll &roll)
+  std::vector<RollEvent> spacePedal(const std::vector<RollEvent> &pedal)
   {
     std::vector<RollEvent> kept;
     for (RollEvent change : pedal)
@@ -282,7 +306,7 @@ namespace
       }
       kept.push_back(change);
     }
-    roll.events.insert(roll.events.end(), kept.begin(), kept.end());
+    return kept;
   }
 
   // Pedal changes (alternating, starting with on) as spans, moved back by lead.
@@ -382,17 +406,19 @@ bool buildPianoRoll(const std::vector<MidiEvent> &events, PianoRoll &roll, const
     {
       pedalSpans(pedal, 0, endMs, report->writtenPedal);
     }
+    std::vector<RollEvent> played = spacePedal(pedal);
     if (volume != 100)
     {
       scaleVelocities(notes, volume);
     }
     if (timing != nullptr && timing->hasLanding())
     {
-      allowForLanding(notes, pedal, *timing);
+      markPedal(notes, played, *timing);
+      allowForLanding(notes, played, *timing);
       roll.leadMs = timing->maxLandingMs();
     }
     separateRepeats(notes, roll);
-    spacePedal(pedal, roll);
+    roll.events.insert(roll.events.end(), played.begin(), played.end());
     if (report != nullptr)
     {
       reportNotes(notes, doubled, roll.leadMs, *report);
@@ -405,8 +431,8 @@ bool buildPianoRoll(const std::vector<MidiEvent> &events, PianoRoll &roll, const
       {
         continue;
       }
-      roll.events.push_back({note.onMs, RollEventType::KeyPress, note.key, note.velocity});
-      roll.events.push_back({note.offMs, RollEventType::KeyRelease, note.key, 0});
+      roll.events.push_back({note.onMs, RollEventType::KeyPress, note.key, note.velocity, note.pedal});
+      roll.events.push_back({note.offMs, RollEventType::KeyRelease, note.key, 0, false});
       roll.noteCount++;
     }
 
@@ -467,7 +493,7 @@ RollStart findRollStart(const PianoRoll &roll, uint32_t fromMs, const VelocityTa
     {
       const RollEvent &event = roll.events[i];
       if (event.type == RollEventType::KeyPress &&
-          event.timeMs + timing->landingMs(event.key, event.velocity) < fromMs)
+          event.timeMs + timing->landingMs(event.key, event.velocity, event.pedal) < fromMs)
       {
         start.skippedPresses.push_back(i);
         start.skipReleases.set(event.key);

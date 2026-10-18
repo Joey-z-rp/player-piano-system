@@ -28,6 +28,7 @@ Examples:
   python3 tools/listen.py scale
   python3 tools/listen.py crescendo 30 --clamp-ms 40 --clamp-offset-ms -15 --above 40
   python3 tools/listen.py neighbours 62 --duty 60
+  python3 tools/listen.py crescendo 30 --pedal --step 4   # soft notes with the dampers off
   python3 tools/listen.py scale --table data/alt.json   # a table made with `table --out data/alt.json`
 """
 
@@ -62,6 +63,13 @@ CRESCENDO_DOWN = False  # come back down too
 
 SOFTEST_REPEATS = 3  # strikes per key at velocity 1
 
+# The sustain pedal, so the dampers can't hide a bounce that strikes twice:
+# None, "note" (pressed before each note and released after it, so no note
+# rings into the next: --pedal) or "held" (down through the whole test:
+# --pedal-held).
+PEDAL = None
+PEDAL_RING_MS = 400  # with "note", how long a note rings after its key is let go, before the pedal lifts
+
 # How long each note is held and the silence after it, per test, in ms.
 TIMING_MS = {
     "scale": (200, 250),
@@ -72,6 +80,15 @@ TIMING_MS = {
 }
 
 # ============================================================================
+
+# The sustain pedal, pressed as a piece presses it (SUSTAIN_PEDAL_CHANNELS and
+# SUSTAIN_PEDAL_PRESS in include/app/piano/piano_controller.h). Stopping at the
+# end releases it, with every key.
+PEDAL_CHANNELS = (88, 89)
+PEDAL_PRESS = "100:30:100:30:55"
+PEDAL_RELEASE = "40:40:30:40:0"
+PEDAL_SETTLE_S = 0.25  # for the pedal to go down
+PEDAL_LIFT_S = 0.15  # for it to come up
 
 # The firmware's default mapping for keys the table doesn't cover
 # (DEFAULT_MIN_DUTY / DEFAULT_MAX_DUTY in include/app/piano/velocity_table.h).
@@ -94,6 +111,8 @@ class Table:
             None  # the overrides apply only to strikes above this duty
         )
         self.settings = document.get("settings", {})
+        # With the pedal down, keys with a "pedal" entry play from it, as the controller plays them.
+        self.pedal = False
         landing = (
             "with landing times"
             if self.shared_landing
@@ -104,10 +123,15 @@ class Table:
             f"Table {path.name} ({len(self.keys)} keys, {landing}; settings {self.settings})"
         )
 
+    def entry(self, key: int) -> dict:
+        """The key's table entry, or with the pedal down its "pedal" entry if it has one."""
+        entry = self.entries.get(key, {})
+        return entry["pedal"] if self.pedal and "pedal" in entry else entry
+
     def duty(self, key: int, velocity: int) -> float:
         velocity = min(max(velocity, 1), 127)
         if key in self.keys:
-            return self.keys[key][velocity - 1]
+            return self.entry(key)["duty"][velocity - 1]
         # As the firmware works it out, in hundredths of a percent.
         hundredths = (
             DEFAULT_MIN_DUTY * 100
@@ -119,7 +143,7 @@ class Table:
         """The press the controller sends for this key and velocity, with any
         command-line overrides."""
         velocity = min(max(velocity, 1), 127)
-        entry = dict(self.entries.get(key, {}))
+        entry = dict(self.entry(key))
         drive = self.drive
         for name, value in self.overrides.items():
             if self.above is None:
@@ -131,7 +155,7 @@ class Table:
             entry[name] = [step for step in steps if step[0] < self.above] + [
                 [self.above, value]
             ]
-        landing_list = entry.get("landing_ms") or self.shared_landing
+        landing_list = entry.get("landing_ms") or self.shared_landing  # a pedal entry always has its own
         landing = landing_list[velocity - 1] if landing_list else None
         return common.drive_command(
             key, self.duty(key, velocity), landing, drive, entry
@@ -147,6 +171,18 @@ class Player:
         self.hold_s = args.hold_ms / 1000
         self.gap_s = args.gap_ms / 1000
         self.count = 0
+        self.pedal = args.pedal
+        self.ring_s = args.pedal_ring_ms / 1000
+        if self.pedal == "held":
+            print("Sustain pedal down through the test.")
+            self.set_pedal(True)
+        elif self.pedal == "note":
+            print("Sustain pedal down for each note.")
+
+    def set_pedal(self, down: bool) -> None:
+        for channel in PEDAL_CHANNELS:
+            self.piano.send(f"P:{channel}:{PEDAL_PRESS if down else PEDAL_RELEASE}")
+        time.sleep(PEDAL_SETTLE_S if down else PEDAL_LIFT_S)
 
     def play(
         self, key: int, duty: float, label: str, command: str | None = None
@@ -157,9 +193,14 @@ class Player:
         print(
             f"  {self.count:3d}. key {key:2d} ({common.note_name(key):>3s})  {label:14s} duty {format_duty(duty):>6s}%  {command}"
         )
+        if self.pedal == "note":
+            self.set_pedal(True)
         self.piano.send(command)
         time.sleep(self.hold_s)
         self.piano.send(f"R:{key}:0")
+        if self.pedal == "note":
+            time.sleep(self.ring_s)
+            self.set_pedal(False)
         time.sleep(self.gap_s)
 
     def pause(self, seconds: float) -> None:
@@ -290,6 +331,27 @@ def main() -> None:
         p.add_argument("--clamp-duty", type=float, help="clamp duty")
         p.add_argument("--hold", type=float, help="hold duty")
         p.add_argument(
+            "--pedal",
+            action="store_const",
+            const="note",
+            default=PEDAL,
+            help="press the sustain pedal for each note (released after it rings), so the dampers can't hide "
+            "a bounce that strikes twice",
+        )
+        p.add_argument(
+            "--pedal-held",
+            dest="pedal",
+            action="store_const",
+            const="held",
+            help="keep the sustain pedal down through the whole test instead",
+        )
+        p.add_argument(
+            "--pedal-ring-ms",
+            type=int,
+            default=PEDAL_RING_MS,
+            help="with --pedal, how long each note rings after its key is let go",
+        )
+        p.add_argument(
             "--above",
             type=float,
             help="apply the overrides above only to strikes above this duty",
@@ -361,6 +423,12 @@ def main() -> None:
         sys.exit("velocity must be 1-127")
 
     table = Table(args.table)
+    table.pedal = args.pedal is not None
+    if table.pedal:
+        with_pedal = sorted(k for k, v in table.entries.items() if "pedal" in v)
+        print(f"Pedal down: {len(with_pedal)} keys play from their pedal entries"
+              + (f" ({', '.join(map(str, with_pedal))})" if with_pedal else "")
+              + "; the rest as with the pedal up")
     table.overrides = {
         name: value
         for name, value in (

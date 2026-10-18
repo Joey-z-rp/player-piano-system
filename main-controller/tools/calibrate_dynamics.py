@@ -30,6 +30,17 @@ Steps:
   5. See it all as charts in the browser (writes calibration/report.html):
        python3 tools/calibrate_dynamics.py report
 
+With the sustain pedal down a key is lighter (the pedal has already lifted
+the dampers it would lift), so it plays louder and lands sooner at the same
+duty. To calibrate for that, measure with the pedal down, at the same mic
+gain as the pedal-up measurements (it's saved apart, in PEDAL_RAW_FILE):
+       python3 tools/calibrate_dynamics.py measure --pedal --keys 20-50
+table then gives each key measured both ways a "pedal" entry: the duty that
+plays each velocity as loud as it plays with the pedal up, and when the hammer
+lands, which the controller uses for notes played with the pedal down. Its
+clamps come from PEDAL_BOUNCE_CLAMP (review --pedal and report --pedal show
+the pedal-down measurements).
+
 Before each key the drivers are restarted. Where the key starts to play is
 taken from the velocity table (an earlier calibration; see START_FROM_TABLE),
 or else searched for live. It's then swept in SOFT_STEP steps from
@@ -184,6 +195,52 @@ BOUNCE_CLAMP: dict[int, tuple | list[tuple]] = {
 }
 BOUNCE_KEYS = list(BOUNCE_CLAMP)
 KEY_CLAMP_MS, KEY_CLAMP_OFFSET_MS, KEY_CLAMP_DUTY = bounce_clamps(BOUNCE_CLAMP)
+# With the pedal down, the clamps instead: the same form, with `above` a
+# pedal-down strike duty and `offset` from the pedal-down landing. Keys not
+# here have no clamp with the pedal down. table prints a draft for the keys in
+# BOUNCE_CLAMP, from where their clamps start in velocity, to start from.
+PEDAL_BOUNCE_CLAMP: dict[int, tuple | list[tuple]] = {
+    26: [(37, -10, 80, 100)],
+    27: [(33, -10, 100, 100), (43, -15, 100, 100)],
+    28: [(28, -40, 100, 100), (29, -30, 100, 100), (33, -20, 100, 100)],
+    29: [(31, -20, 100, 100)],
+    30: [(30, -20, 100, 100), (33, -15, 100, 100)],
+    31: [(34, -10, 100, 100), (40, -20, 100, 100)],
+    32: [(34, -20, 100, 100), (42, -30, 100, 100), (46, -20, 100, 100)],
+    33: [(34, -10, 100, 100)],
+    34: [(32, -15, 100, 100)],
+    35: [(40, -10, 100, 100)],
+    36: [(31, -10, 100, 100)],
+    37: [(32.5, -10, 100, 100), (40, -20, 100, 100)],
+    38: [(31, -10, 100, 100), (41, -20, 100, 100)],
+    39: [(32.5, -10, 100, 100)],
+    40: [(35, -20, 100, 100)],
+    41: [(36, -10, 100, 100)],
+    42: [(28.5, -10, 100, 100)],
+    44: [(30, -10, 100, 100)],
+    45: [(34, -10, 100, 100), (39, -20, 100, 100)],
+    46: [(32, -10, 100, 100)],
+    47: [(30, -10, 100, 100)],
+    48: [(34, -10, 100, 100)],
+    50: [(32, -10, 100, 100)],
+    51: [(30, -10, 100, 100)],
+    52: [(31, -10, 100, 100)],
+    53: [(31, -10, 100, 100)],
+    56: [(31, -10, 100, 100)],
+    57: [(30, -10, 100, 100)],
+    58: [(38, -10, 100, 100)],
+    59: [(28, -10, 100, 100)],
+    61: [(33, -10, 100, 100)],  # heard > 34%
+}
+# The latest a key's hammer may land with the pedal down, in ms: a key whose
+# softest pedal-down note lands later starts its velocities from the lowest
+# duty that lands in time instead (its softest notes are a little louder). The
+# latest landing sets how long after the MIDI everything plays, so "up" keeps
+# it to the latest with the pedal up; None doesn't limit it.
+PEDAL_MAX_LANDING_MS: int | str | None = "up"
+PEDAL_KEY_CLAMP_MS, PEDAL_KEY_CLAMP_OFFSET_MS, PEDAL_KEY_CLAMP_DUTY = bounce_clamps(
+    PEDAL_BOUNCE_CLAMP
+)
 KEY_HOLD_DUTY: dict[int, float | list[tuple[float, float]]] = {
     k: 30 for k in BOUNCE_KEYS
 }
@@ -272,6 +329,10 @@ RECORDING_DIR = PROJECT_DIR / "calibration" / "recordings"
 # damped or bouncing, with comments, and strikes overridden as a note or a
 # thump. table and report apply them.
 FLAGS_FILE = PROJECT_DIR / "calibration" / "flags.json"
+# The same three with the pedal down (measure --pedal, review --pedal).
+PEDAL_RAW_FILE = PROJECT_DIR / "calibration" / "raw_pedal.csv"
+PEDAL_RECORDING_DIR = PROJECT_DIR / "calibration" / "recordings_pedal"
+PEDAL_FLAGS_FILE = PROJECT_DIR / "calibration" / "flags_pedal.json"
 
 # ============================================================================
 
@@ -314,6 +375,9 @@ def main() -> None:
             default=MARGIN_DB,
             help="level above noise that counts as a hit",
         )
+
+    def add_pedal(p, what):
+        p.add_argument("--pedal", action="store_true", help=what)
 
     commands.add_parser("devices", help="list audio input devices").set_defaults(
         run=devices
@@ -401,6 +465,7 @@ def main() -> None:
     p.add_argument(
         "--recordings", type=Path, default=RECORDING_DIR, help="see RECORDING_DIR"
     )
+    add_pedal(p, "with the sustain pedal down for every strike, into PEDAL_RAW_FILE")
     p.set_defaults(run=measure)
 
     def add_mapping(p):
@@ -444,6 +509,10 @@ def main() -> None:
         )
         p.add_argument("--margin-db", type=float, default=MARGIN_DB)
         p.add_argument("--flags", type=Path, default=FLAGS_FILE, help="see FLAGS_FILE")
+        p.add_argument(
+            "--pedal-raw", type=Path, default=PEDAL_RAW_FILE, help="see PEDAL_RAW_FILE"
+        )
+        p.add_argument("--pedal-recordings", type=Path, default=PEDAL_RECORDING_DIR)
 
     p = commands.add_parser(
         "table", help="build the velocity table the controller plays from"
@@ -469,6 +538,7 @@ def main() -> None:
     p.add_argument(
         "--no-open", dest="open", action="store_false", help="don't open the browser"
     )
+    add_pedal(p, "the pedal-down measurements")
     p.set_defaults(run=review)
 
     p = commands.add_parser(
@@ -482,6 +552,7 @@ def main() -> None:
         action="store_false",
         help="write the page without opening it",
     )
+    add_pedal(p, "the pedal-down measurements")
     p.set_defaults(run=report)
 
     args = parser.parse_args()
@@ -491,6 +562,17 @@ def main() -> None:
     )
     if not 0 <= getattr(args, "smoothing", 0) <= 1:
         sys.exit("SMOOTHING must be between 0 and 1")
+    if getattr(args, "pedal", False):
+        # The pedal-down files, unless others were given.
+        for name, usual, pedal in (
+            ("raw", RAW_FILE, PEDAL_RAW_FILE),
+            ("recordings", RECORDING_DIR, PEDAL_RECORDING_DIR),
+            ("flags", FLAGS_FILE, PEDAL_FLAGS_FILE),
+        ):
+            if getattr(args, name, None) == usual:
+                setattr(args, name, pedal)
+    else:
+        args.pedal = False
     args.run(args)
 
 

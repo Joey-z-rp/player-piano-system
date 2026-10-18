@@ -1,6 +1,7 @@
 #ifndef VELOCITY_TABLE_H
 #define VELOCITY_TABLE_H
 
+#include <memory>
 #include <stddef.h>
 #include <stdint.h>
 #include <string>
@@ -56,6 +57,13 @@ static const uint8_t DEFAULT_MAX_DUTY = 80;
 // table can also say when the hammer lands after the press at each velocity
 // (per key where the calibration measured it, and a shared curve for the
 // rest), how presses are driven ("drive"), and a key's own drive settings.
+//
+// With the sustain pedal down the dampers are already lifted, so a key doesn't
+// lift its own: it's lighter, and at the same duty plays louder and lands
+// sooner. A key's "pedal" entry gives its duties, landing times and own drive
+// settings for presses made with the pedal down (calibrated with the pedal
+// down, to the same loudness per velocity). A key without one plays the same
+// either way.
 class VelocityTable
 {
 public:
@@ -64,32 +72,41 @@ public:
   // Reads the table's JSON: each key's "duty" list, in percent with up to two
   // decimals, its optional "landing_ms" list and own drive settings ("coast",
   // "coast_offset_ms", "clamp_offset_ms", "clamp_ms", "clamp_duty", "hold"),
-  // and the optional shared "landing_ms" and "drive". All or nothing: on an
-  // error the table is unchanged and error says why.
+  // its optional "pedal" entry (the same fields, for the pedal down), and the
+  // optional shared "landing_ms" and "drive". All or nothing: on an error the
+  // table is unchanged and error says why.
   bool load(const char *json, size_t length, std::string &error);
 
+  // Each of these takes whether the pedal is down: with it down, a key with a
+  // "pedal" entry plays from that, and any other key as with it up.
+
   // In hundredths of a percent.
-  uint16_t duty(uint8_t key, uint8_t velocity) const;
+  uint16_t duty(uint8_t key, uint8_t velocity, bool pedal = false) const;
   bool isCalibrated(uint8_t key) const;
   size_t calibratedKeys() const;
+  // Whether the key has a "pedal" entry.
+  bool hasPedal(uint8_t key) const;
+  size_t pedalKeys() const;
 
   // Whether the table has any landing times.
   bool hasLanding() const;
   // Ms from the press until the key's hammer lands at this velocity: the
-  // key's own, else the shared curve's, else 0 (unknown).
-  uint16_t landingMs(uint8_t key, uint8_t velocity) const;
-  // The latest landing of any key at any velocity.
+  // key's own, else the shared curve's, else 0 (unknown). With the pedal
+  // down, a key with a "pedal" entry has only that entry's.
+  uint16_t landingMs(uint8_t key, uint8_t velocity, bool pedal = false) const;
+  // The latest landing of any key at any velocity, either way.
   uint16_t maxLandingMs() const;
 
   // How presses are driven: the table's "drive", or the defaults.
   const DriveSettings &drive() const;
   // A key's coast duty: its own ("coast"), else the drive's.
-  uint16_t coastDuty(uint8_t key) const;
+  uint16_t coastDuty(uint8_t key, bool pedal = false) const;
   // A key's setting for a strike at strikeDuty: its own where the table sets
   // it, else the drive's. Its own is one value, or steps of [strike duty
   // above which, value], e.g. "hold": [[0,35],[45,40]]. Duties in hundredths.
-  int32_t setting(uint8_t key, KeySetting which, uint16_t strikeDuty) const;
-  uint16_t holdDuty(uint8_t key, uint16_t strikeDuty) const;
+  // With the pedal down, a key with a "pedal" entry has only that entry's own.
+  int32_t setting(uint8_t key, KeySetting which, uint16_t strikeDuty, bool pedal = false) const;
+  uint16_t holdDuty(uint8_t key, uint16_t strikeDuty, bool pedal = false) const;
 
   // The driver command that presses this key at this velocity. The strike
   // duty for strikeMs; then the coast duty, carrying the hammer through its
@@ -100,29 +117,39 @@ public:
   // strike, then the hold, e.g. "P:30:65:50:20:6:60:40:35". Nothing starts
   // before the strike ends. Without landing times, a plain "P:key:duty".
   // tools/calibration_common.py's drive_command does the same.
-  void pressCommand(uint8_t key, uint8_t velocity, char *out, size_t size) const;
+  void pressCommand(uint8_t key, uint8_t velocity, char *out, size_t size, bool pedal = false) const;
 
   // Percent with up to two decimals, as the drivers take it: 3225 -> "32.25".
   static void formatDuty(char *text, size_t size, uint16_t duty);
 
   static uint16_t defaultDuty(uint8_t velocity);
 
-private:
-  uint16_t duties[PIANO_KEY_COUNT][VELOCITY_LEVELS];
-  bool calibrated[PIANO_KEY_COUNT];
-  uint16_t keyLanding[PIANO_KEY_COUNT][VELOCITY_LEVELS];
-  bool keyHasLanding[PIANO_KEY_COUNT];
-  uint16_t sharedLanding[VELOCITY_LEVELS];
-  bool hasSharedLanding;
-  DriveSettings driveSettings;
-  uint16_t keyCoast[PIANO_KEY_COUNT]; // 0 = the drive's
   struct Steps
   {
     uint16_t above[MAX_SETTING_STEPS]; // strike duty
     int32_t value[MAX_SETTING_STEPS];
     uint8_t count; // 0 = the drive's
   };
-  Steps keySettings[PIANO_KEY_COUNT][(size_t)KeySetting::Count];
+  // Every key's entries for one pedal position.
+  struct Layer
+  {
+    uint16_t duties[PIANO_KEY_COUNT][VELOCITY_LEVELS];
+    bool calibrated[PIANO_KEY_COUNT];
+    uint16_t keyLanding[PIANO_KEY_COUNT][VELOCITY_LEVELS];
+    bool keyHasLanding[PIANO_KEY_COUNT];
+    uint16_t keyCoast[PIANO_KEY_COUNT]; // 0 = the drive's
+    Steps keySettings[PIANO_KEY_COUNT][(size_t)KeySetting::Count];
+  };
+
+private:
+  // The layer a key plays from: its "pedal" entry's with the pedal down, if it has one.
+  const Layer &layer(uint8_t key, bool pedal) const;
+
+  Layer up;
+  std::unique_ptr<Layer> down; // only when some key has a "pedal" entry (~60 KB)
+  uint16_t sharedLanding[VELOCITY_LEVELS];
+  bool hasSharedLanding;
+  DriveSettings driveSettings;
 };
 
 #endif // VELOCITY_TABLE_H

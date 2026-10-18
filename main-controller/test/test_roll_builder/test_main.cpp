@@ -1,4 +1,5 @@
 #include <unity.h>
+#include <algorithm>
 #include "app/piano/roll_builder.h"
 #include "app/piano/velocity_table.h"
 
@@ -118,8 +119,8 @@ void test_note_never_released_ends_with_last_event()
 
 void test_short_note_is_lengthened()
 {
-  build({on(0, C4), off(10, C4)});
-  assertRoll({{0, PRESS, C4_KEY, 64}, {15, RELEASE, C4_KEY, 0}});
+  build({on(0, C4), off(5, C4)});
+  assertRoll({{0, PRESS, C4_KEY, 64}, {10, RELEASE, C4_KEY, 0}});
 }
 
 // --- repeated notes on one key ---
@@ -128,19 +129,19 @@ void test_overlapping_note_waits_for_its_own_note_off()
 {
   // Two hands on one key: B's strike ends A, and A's note-off must not end B.
   build({on(0, C4, 50), on(500, C4, 60), off(700, C4), off(1000, C4)});
-  assertRoll({{0, PRESS, C4_KEY, 50}, {400, RELEASE, C4_KEY, 0}, {500, PRESS, C4_KEY, 60}, {1000, RELEASE, C4_KEY, 0}});
+  assertRoll({{0, PRESS, C4_KEY, 50}, {430, RELEASE, C4_KEY, 0}, {500, PRESS, C4_KEY, 60}, {1000, RELEASE, C4_KEY, 0}});
 }
 
 void test_repeat_with_short_gap_is_released_earlier()
 {
   build({on(0, C4), off(500, C4), on(520, C4), off(800, C4)});
-  assertRoll({{0, PRESS, C4_KEY, 64}, {420, RELEASE, C4_KEY, 0}, {520, PRESS, C4_KEY, 64}, {800, RELEASE, C4_KEY, 0}});
+  assertRoll({{0, PRESS, C4_KEY, 64}, {450, RELEASE, C4_KEY, 0}, {520, PRESS, C4_KEY, 64}, {800, RELEASE, C4_KEY, 0}});
 }
 
 void test_repeat_with_no_gap_is_released_earlier()
 {
   build({on(0, C4), off(300, C4), on(300, C4), off(600, C4)});
-  assertRoll({{0, PRESS, C4_KEY, 64}, {200, RELEASE, C4_KEY, 0}, {300, PRESS, C4_KEY, 64}, {600, RELEASE, C4_KEY, 0}});
+  assertRoll({{0, PRESS, C4_KEY, 64}, {230, RELEASE, C4_KEY, 0}, {300, PRESS, C4_KEY, 64}, {600, RELEASE, C4_KEY, 0}});
 }
 
 void test_repeat_with_enough_gap_is_unchanged()
@@ -152,9 +153,9 @@ void test_repeat_with_enough_gap_is_unchanged()
 
 void test_fast_repeats_keep_as_many_strikes_as_possible()
 {
-  // 4 strikes 60 ms apart: a key can strike every 115 ms, so every other one plays.
+  // 4 strikes 60 ms apart: a key can strike every 80 ms, so every other one plays.
   build({on(0, C4), off(50, C4), on(60, C4), off(110, C4), on(120, C4), off(170, C4), on(180, C4), off(230, C4)});
-  assertRoll({{0, PRESS, C4_KEY, 64}, {20, RELEASE, C4_KEY, 0}, {120, PRESS, C4_KEY, 64}, {230, RELEASE, C4_KEY, 0}});
+  assertRoll({{0, PRESS, C4_KEY, 64}, {50, RELEASE, C4_KEY, 0}, {120, PRESS, C4_KEY, 64}, {230, RELEASE, C4_KEY, 0}});
   TEST_ASSERT_EQUAL_UINT32(2, roll.noteCount);
   TEST_ASSERT_EQUAL_UINT32(2, roll.mergedNotes);
 }
@@ -216,7 +217,7 @@ void test_short_note_is_held_until_after_it_lands()
 {
   VelocityTable table = landingTable();
   build({on(0, C4, 20), off(10, C4)}, &table);
-  assertRoll({{19, PRESS, C4_KEY, 20}, {19 + 130 + 15, RELEASE, C4_KEY, 0}});
+  assertRoll({{19, PRESS, C4_KEY, 20}, {19 + 130 + 10, RELEASE, C4_KEY, 0}});
 }
 
 void test_pedal_moves_by_the_lead()
@@ -229,19 +230,19 @@ void test_pedal_moves_by_the_lead()
 void test_soft_repeats_need_time_for_the_hammer_to_land()
 {
   VelocityTable table = landingTable();
-  // 200 ms apart is too soon for a hammer that takes 130 ms to land...
+  // 200 ms apart is too soon for a hammer that takes 130 ms to land (it needs 130 + 10 + 70)...
   build({on(0, C4, 20), off(100, C4), on(200, C4, 20), off(300, C4)}, &table);
   TEST_ASSERT_EQUAL_UINT32(1, roll.mergedNotes);
-  // ...300 ms is enough, with the first released 100 ms before the second.
+  // ...300 ms is enough, with the first released 70 ms before the second.
   build({on(0, C4, 20), off(100, C4), on(300, C4, 20), off(400, C4)}, &table);
-  assertRoll({{19, PRESS, C4_KEY, 20}, {219, RELEASE, C4_KEY, 0}, {319, PRESS, C4_KEY, 20}, {549, RELEASE, C4_KEY, 0}});
+  assertRoll({{19, PRESS, C4_KEY, 20}, {249, RELEASE, C4_KEY, 0}, {319, PRESS, C4_KEY, 20}, {549, RELEASE, C4_KEY, 0}});
 }
 
 void test_table_without_landing_times_changes_nothing()
 {
   VelocityTable table = landingTable(false);
-  build({on(0, C4), off(10, C4), pedal(0, 127), pedal(500, 0)}, &table);
-  assertRoll({{0, PEDAL_DOWN, 0, 0}, {0, PRESS, C4_KEY, 64}, {15, RELEASE, C4_KEY, 0}, {500, PEDAL_UP, 0, 0}});
+  build({on(0, C4), off(5, C4), pedal(0, 127), pedal(500, 0)}, &table);
+  assertRoll({{0, PEDAL_DOWN, 0, 0}, {0, PRESS, C4_KEY, 64}, {10, RELEASE, C4_KEY, 0}, {500, PEDAL_UP, 0, 0}});
 }
 
 // --- volume ---
@@ -413,10 +414,10 @@ void test_report_shortened_and_lengthened()
   buildReport({on(0, C4), off(500, C4), on(550, C4), off(800, C4), on(1000, D4), off(1005, D4)});
   TEST_ASSERT_EQUAL(3, report.notes.size());
   TEST_ASSERT_EQUAL(NOTE_SHORTENED, report.notes[0].changes);
-  TEST_ASSERT_EQUAL_UINT32(450, report.notes[0].playedOffMs);
+  TEST_ASSERT_EQUAL_UINT32(480, report.notes[0].playedOffMs);
   TEST_ASSERT_EQUAL(0, report.notes[1].changes);
   TEST_ASSERT_EQUAL(NOTE_LENGTHENED, report.notes[2].changes);
-  TEST_ASSERT_EQUAL_UINT32(1015, report.notes[2].playedOffMs);
+  TEST_ASSERT_EQUAL_UINT32(1010, report.notes[2].playedOffMs);
 }
 
 void test_report_velocity_limited_by_volume()
@@ -431,12 +432,12 @@ void test_report_velocity_limited_by_volume()
 void test_report_is_on_the_midi_timeline()
 {
   VelocityTable table = landingTable();
-  buildReport({on(1000, C4, 100), off(1500, C4), on(2000, D4, 100), off(2010, D4)}, &table);
+  buildReport({on(1000, C4, 100), off(1500, C4), on(2000, D4, 100), off(2005, D4)}, &table);
   TEST_ASSERT_EQUAL_UINT32(1000, report.notes[0].onMs);
   TEST_ASSERT_EQUAL_UINT32(1500, report.notes[0].playedOffMs);
   TEST_ASSERT_EQUAL(0, report.notes[0].changes);
-  // Held until 15 ms after its hammer lands, as it sounds.
-  TEST_ASSERT_EQUAL_UINT32(2015, report.notes[1].playedOffMs);
+  // Held until 10 ms after its hammer lands, as it sounds.
+  TEST_ASSERT_EQUAL_UINT32(2010, report.notes[1].playedOffMs);
   TEST_ASSERT_EQUAL(NOTE_LENGTHENED, report.notes[1].changes);
 }
 
@@ -496,6 +497,77 @@ void test_duplicate_note_is_played_once_and_reported_apart()
   TEST_ASSERT_EQUAL_UINT32(1140, report.notes[1].writtenOffMs);
 }
 
+// landingTable, plus a pedal entry for C4 whose hammer lands 30 ms sooner (120 - velocity, from 0).
+static VelocityTable pedalTable()
+{
+  std::string duties, up, down;
+  for (int velocity = 1; velocity <= 127; velocity++)
+  {
+    duties += (velocity > 1 ? "," : "") + std::string("40");
+    up += (velocity > 1 ? "," : "") + std::to_string(150 - velocity);
+    down += (velocity > 1 ? "," : "") + std::to_string(std::max(120 - velocity, 0));
+  }
+  std::string json = "{\"landing_ms\":[" + up + "],\"keys\":{\"" + std::to_string(C4_KEY) + "\":{\"duty\":[" + duties +
+                     "],\"pedal\":{\"duty\":[" + duties + "],\"landing_ms\":[" + down + "]}}}}";
+  VelocityTable table;
+  std::string error;
+  TEST_ASSERT_TRUE_MESSAGE(table.load(json.data(), json.size(), error), error.c_str());
+  return table;
+}
+
+void test_notes_under_the_pedal_use_its_landing_times()
+{
+  // Lead 149. C4 at 1000 with the pedal up lands 50 ms after its press; at 2000,
+  // with the pedal down since 1800, 20 ms after. Each is sent so it sounds lead
+  // after the MIDI.
+  VelocityTable table = pedalTable();
+  build({on(1000, C4, 100), off(1500, C4), pedal(1800, 127), on(2000, C4, 100), off(2500, C4), pedal(3000, 0)},
+        &table);
+  std::vector<RollEvent> presses;
+  for (const RollEvent &event : roll.events)
+  {
+    if (event.type == RollEventType::KeyPress)
+    {
+      presses.push_back(event);
+    }
+  }
+  TEST_ASSERT_EQUAL(2, presses.size());
+  TEST_ASSERT_EQUAL_UINT32(1000 + 149 - 50, presses[0].timeMs);
+  TEST_ASSERT_FALSE(presses[0].pedal);
+  TEST_ASSERT_EQUAL_UINT32(2000 + 149 - 20, presses[1].timeMs);
+  TEST_ASSERT_TRUE(presses[1].pedal);
+}
+
+void test_pedal_counts_only_once_the_dampers_are_surely_up()
+{
+  // C4 at velocity 100 is pressed 50 ms before it sounds (with the pedal up),
+  // and the pedal needs 100 ms to lift the dampers: down 150 ms before the
+  // note, it counts; any later, or lifting before the note sounds, it doesn't.
+  VelocityTable table = pedalTable();
+  auto pressedWithPedal = []()
+  {
+    for (const RollEvent &event : roll.events)
+    {
+      if (event.type == RollEventType::KeyPress)
+      {
+        return event.pedal;
+      }
+    }
+    TEST_FAIL_MESSAGE("no press");
+    return false;
+  };
+  build({pedal(850, 127), on(1000, C4, 100), off(1500, C4)}, &table);
+  TEST_ASSERT_TRUE(pressedWithPedal());
+  build({pedal(851, 127), on(1000, C4, 100), off(1500, C4)}, &table);
+  TEST_ASSERT_FALSE(pressedWithPedal());
+  build({pedal(1000, 127), on(1000, C4, 100), off(1500, C4)}, &table);
+  TEST_ASSERT_FALSE(pressedWithPedal());
+  build({pedal(0, 127), pedal(999, 0), on(1000, C4, 100), off(1500, C4)}, &table);
+  TEST_ASSERT_FALSE(pressedWithPedal());
+  build({pedal(0, 127), pedal(1000, 0), on(1000, C4, 100), off(1500, C4)}, &table);
+  TEST_ASSERT_TRUE(pressedWithPedal()); // lifts as it sounds: the key's travel is over
+}
+
 int main()
 {
   UNITY_BEGIN();
@@ -541,5 +613,7 @@ int main()
   RUN_TEST(test_doubled_note_is_struck_once_at_the_louder_velocity);
   RUN_TEST(test_louder_note_written_just_before_sounds_on_time);
   RUN_TEST(test_duplicate_note_is_played_once_and_reported_apart);
+  RUN_TEST(test_notes_under_the_pedal_use_its_landing_times);
+  RUN_TEST(test_pedal_counts_only_once_the_dampers_are_surely_up);
   return UNITY_END();
 }

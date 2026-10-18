@@ -23,6 +23,7 @@ struct RollEvent
   RollEventType type;
   uint8_t key;      // 0-87 (A0-C8), key events only
   uint8_t velocity; // 1-127, KeyPress only
+  bool pedal;       // KeyPress only: the sustain pedal is down, so it plays as calibrated with it down
 };
 
 struct PianoRoll

@@ -442,6 +442,78 @@ void test_generated_table_loads()
   }
 }
 
+// A pedal entry for key 40: duty 35, landing 80, its own hold.
+static const std::string PEDAL_ENTRY = []()
+{
+  std::string duties, lands;
+  for (int i = 0; i < 127; i++)
+  {
+    duties += (i ? "," : "") + std::string("35");
+    lands += (i ? "," : "") + std::string("80");
+  }
+  return "\"pedal\":{\"duty\":[" + duties + "],\"landing_ms\":[" + lands + "],\"hold\":30}";
+}();
+
+void test_pedal_entry_plays_with_the_pedal_down()
+{
+  // With the pedal up: the key's own clamp. Down: the pedal entry's duty, landing
+  // and hold, and no clamp, since the entry doesn't have one.
+  std::string json = pressTable(100, "\"clamp_offset_ms\":-10,\"clamp_ms\":30,\"clamp_duty\":65," + PEDAL_ENTRY);
+  VelocityTable table;
+  std::string error;
+  TEST_ASSERT_TRUE_MESSAGE(load(table, json, error), error.c_str());
+  TEST_ASSERT_TRUE(table.hasPedal(40));
+  TEST_ASSERT_FALSE(table.hasPedal(41));
+  TEST_ASSERT_EQUAL(1, table.pedalKeys());
+  TEST_ASSERT_EQUAL_UINT16(4000, table.duty(40, 64));
+  TEST_ASSERT_EQUAL_UINT16(3500, table.duty(40, 64, true));
+  TEST_ASSERT_EQUAL_UINT16(100, table.landingMs(40, 64));
+  TEST_ASSERT_EQUAL_UINT16(80, table.landingMs(40, 64, true));
+  char command[49];
+  table.pressCommand(40, 64, command, sizeof(command));
+  TEST_ASSERT_EQUAL_STRING("P:40:40:50:20:40:65:30:25", command);
+  table.pressCommand(40, 64, command, sizeof(command), true);
+  TEST_ASSERT_EQUAL_STRING("P:40:35:50:20:40:30", command);
+}
+
+void test_key_without_a_pedal_entry_plays_the_same_either_way()
+{
+  VelocityTable table;
+  std::string error;
+  TEST_ASSERT_TRUE(load(table, withLanding(tableJson({40, 41})), error));
+  TEST_ASSERT_EQUAL(0, table.pedalKeys());
+  TEST_ASSERT_EQUAL_UINT16(table.duty(40, 64), table.duty(40, 64, true));
+  TEST_ASSERT_EQUAL_UINT16(table.landingMs(40, 64), table.landingMs(40, 64, true));
+  char up[49], down[49];
+  table.pressCommand(40, 64, up, sizeof(up));
+  table.pressCommand(40, 64, down, sizeof(down), true);
+  TEST_ASSERT_EQUAL_STRING(up, down);
+}
+
+void test_rejects_a_pedal_entry_without_landing_times()
+{
+  VelocityTable table;
+  std::string error;
+  TEST_ASSERT_TRUE(load(table, pressTable(100, PEDAL_ENTRY), error));
+  std::string duties;
+  for (int i = 0; i < 127; i++)
+  {
+    duties += (i ? "," : "") + std::string("30");
+  }
+  TEST_ASSERT_FALSE(load(table, pressTable(100, "\"pedal\":{\"duty\":[" + duties + "]}"), error));
+  TEST_ASSERT_EQUAL_STRING("key 40 pedal: needs \"landing_ms\"", error.c_str());
+  TEST_ASSERT_TRUE(table.hasPedal(40)); // unchanged
+  TEST_ASSERT_EQUAL_UINT16(3500, table.duty(40, 1, true));
+}
+
+void test_latest_landing_includes_the_pedal_entries()
+{
+  VelocityTable table;
+  std::string error;
+  TEST_ASSERT_TRUE(load(table, pressTable(60, PEDAL_ENTRY), error));
+  TEST_ASSERT_EQUAL_UINT16(80, table.maxLandingMs());
+}
+
 int main()
 {
   UNITY_BEGIN();
@@ -477,6 +549,10 @@ int main()
   RUN_TEST(test_clamp_steps_follow_the_strike_duty);
   RUN_TEST(test_drive_replaces_the_defaults);
   RUN_TEST(test_rejects_bad_drive_settings);
+  RUN_TEST(test_pedal_entry_plays_with_the_pedal_down);
+  RUN_TEST(test_key_without_a_pedal_entry_plays_the_same_either_way);
+  RUN_TEST(test_rejects_a_pedal_entry_without_landing_times);
+  RUN_TEST(test_latest_landing_includes_the_pedal_entries);
   RUN_TEST(test_generated_table_loads);
   return UNITY_END();
 }

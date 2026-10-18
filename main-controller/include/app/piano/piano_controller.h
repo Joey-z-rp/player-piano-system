@@ -146,7 +146,7 @@ private:
   void restartDrivers();
   void sendPedal(const char *params);
   bool send(const char *command);
-  void sendPress(uint8_t key, uint8_t velocity);
+  void sendPress(uint8_t key, uint8_t velocity, bool pedal);
 
   Rs485Module *rs485;
   const VelocityTable *velocityTable;

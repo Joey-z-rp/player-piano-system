@@ -40,10 +40,13 @@ static uint8_t clampVelocity(uint8_t velocity)
   return velocity > VELOCITY_LEVELS ? VELOCITY_LEVELS : velocity;
 }
 
-VelocityTable::VelocityTable()
-    : duties(), calibrated(), keyLanding(), keyHasLanding(), sharedLanding(), hasSharedLanding(false),
-      driveSettings(), keyCoast(), keySettings()
+VelocityTable::VelocityTable() : up(), down(), sharedLanding(), hasSharedLanding(false), driveSettings()
 {
+}
+
+const VelocityTable::Layer &VelocityTable::layer(uint8_t key, bool pedal) const
+{
+  return pedal && hasPedal(key) ? *down : up;
 }
 
 // Reads a "landing_ms" list of 127 times into out.
@@ -74,18 +77,33 @@ uint16_t VelocityTable::defaultDuty(uint8_t velocity)
   return DEFAULT_MIN_DUTY * 100 + (uint32_t)(velocity - 1) * (DEFAULT_MAX_DUTY - DEFAULT_MIN_DUTY) * 100 / (VELOCITY_LEVELS - 1);
 }
 
-uint16_t VelocityTable::duty(uint8_t key, uint8_t velocity) const
+uint16_t VelocityTable::duty(uint8_t key, uint8_t velocity, bool pedal) const
 {
   if (!isCalibrated(key))
   {
     return defaultDuty(velocity);
   }
-  return duties[key][clampVelocity(velocity) - 1];
+  return layer(key, pedal).duties[key][clampVelocity(velocity) - 1];
 }
 
 bool VelocityTable::isCalibrated(uint8_t key) const
 {
-  return key < PIANO_KEY_COUNT && calibrated[key];
+  return key < PIANO_KEY_COUNT && up.calibrated[key];
+}
+
+bool VelocityTable::hasPedal(uint8_t key) const
+{
+  return down != nullptr && key < PIANO_KEY_COUNT && down->calibrated[key];
+}
+
+size_t VelocityTable::pedalKeys() const
+{
+  size_t count = 0;
+  for (uint8_t key = 0; key < PIANO_KEY_COUNT; key++)
+  {
+    count += hasPedal(key) ? 1 : 0;
+  }
+  return count;
 }
 
 bool VelocityTable::hasLanding() const
@@ -94,9 +112,9 @@ bool VelocityTable::hasLanding() const
   {
     return true;
   }
-  for (bool own : keyHasLanding)
+  for (uint8_t key = 0; key < PIANO_KEY_COUNT; key++)
   {
-    if (own)
+    if (up.keyHasLanding[key] || hasPedal(key))
     {
       return true;
     }
@@ -104,12 +122,12 @@ bool VelocityTable::hasLanding() const
   return false;
 }
 
-uint16_t VelocityTable::landingMs(uint8_t key, uint8_t velocity) const
+uint16_t VelocityTable::landingMs(uint8_t key, uint8_t velocity, bool pedal) const
 {
   size_t index = clampVelocity(velocity) - 1;
-  if (key < PIANO_KEY_COUNT && keyHasLanding[key])
+  if (key < PIANO_KEY_COUNT && layer(key, pedal).keyHasLanding[key])
   {
-    return keyLanding[key][index];
+    return layer(key, pedal).keyLanding[key][index];
   }
   return hasSharedLanding ? sharedLanding[index] : 0;
 }
@@ -121,8 +139,11 @@ uint16_t VelocityTable::maxLandingMs() const
   {
     for (uint8_t velocity = 1; velocity <= VELOCITY_LEVELS; velocity++)
     {
-      uint16_t ms = landingMs(key, velocity);
-      latest = ms > latest ? ms : latest;
+      for (bool pedal : {false, true})
+      {
+        uint16_t ms = landingMs(key, velocity, pedal);
+        latest = ms > latest ? ms : latest;
+      }
     }
   }
   return latest;
@@ -145,12 +166,12 @@ void VelocityTable::formatDuty(char *text, size_t size, uint16_t duty)
   }
 }
 
-void VelocityTable::pressCommand(uint8_t key, uint8_t velocity, char *out, size_t size) const
+void VelocityTable::pressCommand(uint8_t key, uint8_t velocity, char *out, size_t size, bool pedal) const
 {
-  uint16_t strikeDuty = duty(key, velocity);
+  uint16_t strikeDuty = duty(key, velocity, pedal);
   char strike[8];
   formatDuty(strike, sizeof(strike), strikeDuty);
-  uint16_t landing = landingMs(key, velocity);
+  uint16_t landing = landingMs(key, velocity, pedal);
   if (landing == 0)
   {
     snprintf(out, size, "P:%u:%s", key, strike);
@@ -158,23 +179,23 @@ void VelocityTable::pressCommand(uint8_t key, uint8_t velocity, char *out, size_
   }
   const int32_t strikeMs = driveSettings.strikeMs;
   char coast[8], hold[8];
-  formatDuty(coast, sizeof(coast), coastDuty(key));
-  formatDuty(hold, sizeof(hold), holdDuty(key, strikeDuty));
-  int32_t clampMs = setting(key, KeySetting::ClampMs, strikeDuty);
+  formatDuty(coast, sizeof(coast), coastDuty(key, pedal));
+  formatDuty(hold, sizeof(hold), holdDuty(key, strikeDuty, pedal));
+  int32_t clampMs = setting(key, KeySetting::ClampMs, strikeDuty, pedal);
   if (clampMs > 0)
   {
-    int32_t clampAt = landing + setting(key, KeySetting::ClampOffsetMs, strikeDuty);
+    int32_t clampAt = landing + setting(key, KeySetting::ClampOffsetMs, strikeDuty, pedal);
     if (clampAt < strikeMs)
     {
       clampAt = strikeMs;
     }
     char clamp[8];
-    formatDuty(clamp, sizeof(clamp), (uint16_t)setting(key, KeySetting::ClampDuty, strikeDuty));
+    formatDuty(clamp, sizeof(clamp), (uint16_t)setting(key, KeySetting::ClampDuty, strikeDuty, pedal));
     snprintf(out, size, "P:%u:%s:%u:%s:%u:%s:%u:%s", key, strike, (unsigned)strikeMs, coast,
              (unsigned)(clampAt - strikeMs), clamp, (unsigned)clampMs, hold);
     return;
   }
-  int32_t holdAt = landing + setting(key, KeySetting::CoastOffsetMs, strikeDuty);
+  int32_t holdAt = landing + setting(key, KeySetting::CoastOffsetMs, strikeDuty, pedal);
   if (holdAt < strikeMs)
   {
     holdAt = strikeMs;
@@ -188,9 +209,10 @@ const DriveSettings &VelocityTable::drive() const
   return driveSettings;
 }
 
-uint16_t VelocityTable::coastDuty(uint8_t key) const
+uint16_t VelocityTable::coastDuty(uint8_t key, bool pedal) const
 {
-  return key < PIANO_KEY_COUNT && keyCoast[key] ? keyCoast[key] : driveSettings.coastDuty;
+  return key < PIANO_KEY_COUNT && layer(key, pedal).keyCoast[key] ? layer(key, pedal).keyCoast[key]
+                                                                   : driveSettings.coastDuty;
 }
 
 static int32_t driveDefault(const DriveSettings &drive, KeySetting which)
@@ -211,13 +233,13 @@ static int32_t driveDefault(const DriveSettings &drive, KeySetting which)
   }
 }
 
-int32_t VelocityTable::setting(uint8_t key, KeySetting which, uint16_t strikeDuty) const
+int32_t VelocityTable::setting(uint8_t key, KeySetting which, uint16_t strikeDuty, bool pedal) const
 {
-  if (key >= PIANO_KEY_COUNT || keySettings[key][(size_t)which].count == 0)
+  if (key >= PIANO_KEY_COUNT || layer(key, pedal).keySettings[key][(size_t)which].count == 0)
   {
     return driveDefault(driveSettings, which);
   }
-  const Steps &steps = keySettings[key][(size_t)which];
+  const Steps &steps = layer(key, pedal).keySettings[key][(size_t)which];
   int32_t value = steps.value[0];
   for (uint8_t i = 1; i < steps.count; i++)
   {
@@ -229,9 +251,9 @@ int32_t VelocityTable::setting(uint8_t key, KeySetting which, uint16_t strikeDut
   return value;
 }
 
-uint16_t VelocityTable::holdDuty(uint8_t key, uint16_t strikeDuty) const
+uint16_t VelocityTable::holdDuty(uint8_t key, uint16_t strikeDuty, bool pedal) const
 {
-  return (uint16_t)setting(key, KeySetting::HoldDuty, strikeDuty);
+  return (uint16_t)setting(key, KeySetting::HoldDuty, strikeDuty, pedal);
 }
 
 // Reads a duty in percent (up to 100) as hundredths, or a whole number of ms
@@ -366,11 +388,76 @@ static bool readDrive(JsonVariant value, DriveSettings &drive, std::string &erro
 size_t VelocityTable::calibratedKeys() const
 {
   size_t count = 0;
-  for (bool on : calibrated)
+  for (bool on : up.calibrated)
   {
     count += on ? 1 : 0;
   }
   return count;
+}
+
+// Reads one key's entry (its "duty", "landing_ms", "coast" and own drive
+// settings) into into. where names it in errors, e.g. "key 40: ".
+static bool readEntry(JsonVariant entry, long key, const std::string &where, bool needsLanding,
+                      VelocityTable::Layer &into, std::string &error)
+{
+  JsonArray values = entry["duty"];
+  if (values.isNull() || values.size() != VELOCITY_LEVELS)
+  {
+    error = where + "\"duty\" must list 127 values";
+    return false;
+  }
+  size_t index = 0;
+  for (JsonVariant value : values)
+  {
+    if (!value.is<double>() || value.as<double>() < 0 || value.as<double>() > 100)
+    {
+      error = where + "duties must be numbers 0-100";
+      return false;
+    }
+    into.duties[key][index++] = (uint16_t)lround(value.as<double>() * 100);
+  }
+  into.calibrated[key] = true;
+
+  JsonVariant ownLanding = entry["landing_ms"];
+  if (ownLanding.isNull() && needsLanding)
+  {
+    error = where + "needs \"landing_ms\"";
+    return false;
+  }
+  if (!ownLanding.isNull())
+  {
+    if (!readLanding(ownLanding, into.keyLanding[key], where, error))
+    {
+      return false;
+    }
+    into.keyHasLanding[key] = true;
+  }
+  JsonVariant coast = entry["coast"];
+  if (!coast.isNull())
+  {
+    int32_t coastDuty = 0;
+    if (!readValue(coast, where + "coast", true, 0, 100, coastDuty, error))
+    {
+      return false;
+    }
+    if (coastDuty == 0)
+    {
+      error = where + "coast must be above 0";
+      return false;
+    }
+    into.keyCoast[key] = (uint16_t)coastDuty;
+  }
+  for (size_t which = 0; which < (size_t)KeySetting::Count; which++)
+  {
+    const SettingSpec &spec = SETTING_SPECS[which];
+    VelocityTable::Steps &steps = into.keySettings[key][which];
+    if (!readSteps(entry[spec.name], where + spec.name, spec.isDuty, spec.low, spec.high, steps.above, steps.value,
+                   steps.count, error))
+    {
+      return false;
+    }
+  }
+  return true;
 }
 
 bool VelocityTable::load(const char *json, size_t length, std::string &error)
@@ -382,6 +469,14 @@ bool VelocityTable::load(const char *json, size_t length, std::string &error)
   for (const SettingSpec &spec : SETTING_SPECS)
   {
     filter["keys"]["*"][spec.name] = true;
+  }
+  JsonObject pedalFilter = filter["keys"]["*"]["pedal"].to<JsonObject>();
+  pedalFilter["duty"] = true;
+  pedalFilter["landing_ms"] = true;
+  pedalFilter["coast"] = true;
+  for (const SettingSpec &spec : SETTING_SPECS)
+  {
+    pedalFilter[spec.name] = true;
   }
   filter["drive"] = true;
   filter["landing_ms"] = true;
@@ -400,12 +495,9 @@ bool VelocityTable::load(const char *json, size_t length, std::string &error)
   }
 
   // Filled separately, so a bad entry leaves the current table as it was.
-  std::vector<uint16_t> nextDuties(PIANO_KEY_COUNT * VELOCITY_LEVELS);
-  bool nextCalibrated[PIANO_KEY_COUNT] = {};
-  std::vector<uint16_t> nextKeyLanding(PIANO_KEY_COUNT * VELOCITY_LEVELS);
-  bool nextKeyHasLanding[PIANO_KEY_COUNT] = {};
-  uint16_t nextCoast[PIANO_KEY_COUNT] = {};
-  std::vector<Steps> nextSettings(PIANO_KEY_COUNT * (size_t)KeySetting::Count, Steps());
+  // (~60 KB each: on the controller, allocations this big come from PSRAM.)
+  std::unique_ptr<Layer> nextUp(new Layer());
+  std::unique_ptr<Layer> nextDown;
   for (JsonPair pair : keys)
   {
     const char *name = pair.key().c_str();
@@ -416,55 +508,25 @@ bool VelocityTable::load(const char *json, size_t length, std::string &error)
       error = std::string("key \"") + name + "\" is not 0-87";
       return false;
     }
-    JsonArray values = pair.value()["duty"];
-    if (values.isNull() || values.size() != VELOCITY_LEVELS)
+    std::string where = "key " + std::to_string(key) + ": ";
+    if (!readEntry(pair.value(), key, where, false, *nextUp, error))
     {
-      error = "key " + std::to_string(key) + ": \"duty\" must list 127 values";
       return false;
     }
-    size_t index = 0;
-    for (JsonVariant value : values)
+    JsonVariant pedal = pair.value()["pedal"];
+    if (!pedal.isNull())
     {
-      if (!value.is<double>() || value.as<double>() < 0 || value.as<double>() > 100)
+      if (!pedal.is<JsonObject>())
       {
-        error = "key " + std::to_string(key) + ": duties must be numbers 0-100";
+        error = where + "\"pedal\" must be an object";
         return false;
       }
-      nextDuties[key * VELOCITY_LEVELS + index++] = (uint16_t)lround(value.as<double>() * 100);
-    }
-    nextCalibrated[key] = true;
-
-    JsonVariant ownLanding = pair.value()["landing_ms"];
-    if (!ownLanding.isNull())
-    {
-      if (!readLanding(ownLanding, &nextKeyLanding[key * VELOCITY_LEVELS], "key " + std::to_string(key) + ": ",
-                       error))
+      if (nextDown == nullptr)
       {
-        return false;
+        nextDown.reset(new Layer());
       }
-      nextKeyHasLanding[key] = true;
-    }
-    JsonVariant coast = pair.value()["coast"];
-    if (!coast.isNull())
-    {
-      int32_t coastDuty = 0;
-      if (!readValue(coast, "key " + std::to_string(key) + ": coast", true, 0, 100, coastDuty, error))
-      {
-        return false;
-      }
-      if (coastDuty == 0)
-      {
-        error = "key " + std::to_string(key) + ": coast must be above 0";
-        return false;
-      }
-      nextCoast[key] = (uint16_t)coastDuty;
-    }
-    for (size_t which = 0; which < (size_t)KeySetting::Count; which++)
-    {
-      const SettingSpec &spec = SETTING_SPECS[which];
-      Steps &steps = nextSettings[key * (size_t)KeySetting::Count + which];
-      if (!readSteps(pair.value()[spec.name], "key " + std::to_string(key) + ": " + spec.name, spec.isDuty, spec.low,
-                     spec.high, steps.above, steps.value, steps.count, error))
+      // Its timing is what makes it worth having, so it needs landing times.
+      if (!readEntry(pedal, key, "key " + std::to_string(key) + " pedal: ", true, *nextDown, error))
       {
         return false;
       }
@@ -484,14 +546,10 @@ bool VelocityTable::load(const char *json, size_t length, std::string &error)
     return false;
   }
 
-  memcpy(duties, nextDuties.data(), sizeof(duties));
-  memcpy(calibrated, nextCalibrated, sizeof(calibrated));
-  memcpy(keyLanding, nextKeyLanding.data(), sizeof(keyLanding));
-  memcpy(keyHasLanding, nextKeyHasLanding, sizeof(keyHasLanding));
+  up = *nextUp;
+  down = std::move(nextDown);
   memcpy(sharedLanding, nextShared, sizeof(sharedLanding));
   hasSharedLanding = nextHasShared;
-  memcpy(keyCoast, nextCoast, sizeof(keyCoast));
-  memcpy(keySettings, nextSettings.data(), sizeof(keySettings));
   driveSettings = nextDrive;
   return true;
 }

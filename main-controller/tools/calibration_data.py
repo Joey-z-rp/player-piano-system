@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import csv
 import json
+import statistics
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -113,10 +114,11 @@ def save_recordings(folder: Path, key: int, rows: list[dict], sample_rate: int) 
     )
 
 
-def reanalyse(rows: list[dict], folder: Path, margin_db: float) -> int:
+def reanalyse(rows: list[dict], folder: Path, margin_db: float, later_onset: bool = False) -> int:
     """Measures each strike again from its recording, so every key with
     recordings is judged by the current analysis. Returns how many strikes'
-    results changed."""
+    results changed. later_onset for the pedal-down measurements (see
+    measure_strike)."""
     changed = 0
     by_key = defaultdict(list)
     for row in rows:
@@ -133,7 +135,7 @@ def reanalyse(rows: list[dict], folder: Path, margin_db: float) -> int:
             recording = audio.get(row["repeat"])
             if recording is None:
                 continue
-            measured = analyse_strike(recording.astype(np.float32) / 32767, rate, sos, margin_db, key)
+            measured = analyse_strike(recording.astype(np.float32) / 32767, rate, sos, margin_db, key, later_onset)
             before = (row["hit"], row["lands_ms"] if row["hit"] else None, row["peak_db"])
             row.update(
                 result=measured.result,
@@ -160,6 +162,8 @@ def bounce_clamps(table: dict) -> tuple[dict, dict, dict]:
     no clamp below the first."""
     clamp_ms, offset, duty = {}, {}, {}
     for key, sets in table.items():
+        if not sets:
+            continue
         sets = sorted([sets] if isinstance(sets, tuple) else list(sets))
         aboves = [s[0] for s in sets]
         if len(set(aboves)) != len(aboves):
@@ -176,17 +180,21 @@ def bounce_clamps(table: dict) -> tuple[dict, dict, dict]:
     return clamp_ms, offset, duty
 
 
-def key_drive(key: int, cfg) -> dict:
+def key_drive(key: int, cfg, pedal: bool = False) -> dict:
     """A key's own drive settings for its table entry, where they differ from
     the drive: "coast", "coast_offset_ms", "clamp_offset_ms", "clamp_ms",
     "clamp_duty" and "hold", all but "coast" either one value or [[strike
-    duty above which, value], ...]. See KEY_* in calibrate_dynamics.py."""
+    duty above which, value], ...]. See KEY_* in calibrate_dynamics.py. With
+    the pedal down, its clamp comes from PEDAL_BOUNCE_CLAMP instead."""
+    clamp_offset = cfg.PEDAL_KEY_CLAMP_OFFSET_MS if pedal else cfg.KEY_CLAMP_OFFSET_MS
+    clamp_ms = cfg.PEDAL_KEY_CLAMP_MS if pedal else cfg.KEY_CLAMP_MS
+    clamp_duty = cfg.PEDAL_KEY_CLAMP_DUTY if pedal else cfg.KEY_CLAMP_DUTY
     # (entry field, per-key setting, default, a time in whole ms)
     fields = [("coast", cfg.KEY_COAST_DUTY, cfg.COAST_DUTY, False),
               ("coast_offset_ms", cfg.KEY_COAST_OFFSET_MS, cfg.COAST_OFFSET_MS, True),
-              ("clamp_offset_ms", cfg.KEY_CLAMP_OFFSET_MS, cfg.CLAMP_OFFSET_MS, True),
-              ("clamp_ms", cfg.KEY_CLAMP_MS, cfg.CLAMP_MS, True),
-              ("clamp_duty", cfg.KEY_CLAMP_DUTY, cfg.CLAMP_DUTY, False),
+              ("clamp_offset_ms", clamp_offset, cfg.CLAMP_OFFSET_MS, True),
+              ("clamp_ms", clamp_ms, cfg.CLAMP_MS, True),
+              ("clamp_duty", clamp_duty, cfg.CLAMP_DUTY, False),
               ("hold", cfg.KEY_HOLD_DUTY, cfg.HOLD_DUTY, False)]
     own = {}
     for name, per_key, default, whole_ms in fields:
@@ -209,15 +217,55 @@ def load_flags(path: Path) -> dict:
 
 
 def load_by_key(path: Path, recordings: Path | None = None, margin_db: float = MARGIN_DB,
-                flags: dict | None = None, ignore_first_strike: bool = True) -> dict[int, dict[int, list[dict]]]:
+                flags: dict | None = None, ignore_first_strike: bool = True,
+                pedal: bool = False) -> dict[int, dict[int, list[dict]]]:
+    """Strikes by key and duty (see group_rows), re-analysed from their
+    recordings. pedal: measured with the pedal down, so judged as such (see
+    measure_strike's later_onset, and drop_thumps)."""
     rows = load_raw(path)
     if not rows:
         sys.exit(f"no measurements in {path}")
     if recordings is not None:
-        changed = reanalyse(rows, recordings, margin_db)
+        changed = reanalyse(rows, recordings, margin_db, pedal)
         if changed:
             print(f"{changed} strike(s) re-analysed from their recordings differ from when they were measured")
-    return group_rows(rows, flags, ignore_first_strike)
+    by_key = group_rows(rows, flags, ignore_first_strike)
+    if pedal:
+        dropped = drop_thumps(by_key, flags)
+        if dropped:
+            print(f"{len(dropped)} strike(s) taken as the press's thump ringing the open strings, not notes")
+    return by_key
+
+
+# A pedal-down "note" landing under this fraction of the time the same key's
+# notes take 3-15% duty higher up (see drop_thumps).
+THUMP_LANDING_FRACTION = 0.6
+
+
+def drop_thumps(by_key: dict[int, dict[float, list[dict]]], flags: dict | None = None) -> set[tuple[int, int]]:
+    """With the pedal down no string is damped, so a press's thump can set the
+    low strings ringing long enough to pass as a note: within ~10 ms of the
+    press, at their pitch rather than the key's. A note can't land sooner than
+    the same key does at a higher duty (a lower duty is a slower stroke), so a
+    hit landing under THUMP_LANDING_FRACTION of the key's landing 3-15% higher
+    up is counted as a miss, unless you've judged it on the review page.
+    Returns those strikes, as (key, repeat)."""
+    judged = (flags or {}).get("strikes", {})
+    dropped = set()
+    for key, levels in by_key.items():
+        lands = {d: statistics.median(ls) for d, rows in levels.items()
+                 if (ls := [r["lands_ms"] for r in rows if r["hit"] and r["lands_ms"] is not None])}
+        for duty, rows in levels.items():
+            above = [ms for d, ms in lands.items() if duty + 3 <= d <= duty + 15]
+            if not above:
+                continue
+            limit = THUMP_LANDING_FRACTION * statistics.median(above)
+            for i, row in enumerate(rows):
+                if (row["hit"] and row["lands_ms"] is not None and row["lands_ms"] < limit
+                        and f"{key}:{row['repeat']}" not in judged):
+                    rows[i] = {**row, "hit": False, "result": "thump"}
+                    dropped.add((key, row["repeat"]))
+    return dropped
 
 
 def group_rows(rows: list[dict], flags: dict | None = None,

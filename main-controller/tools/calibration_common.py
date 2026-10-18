@@ -150,11 +150,32 @@ def note_onset(levels: np.ndarray, threshold_db: float) -> int | None:
     return None
 
 
+def lasting_onset(levels: np.ndarray, threshold_db: float) -> int | None:
+    """Like note_onset, but skipping sounds that don't last SUSTAIN_MS: the
+    start of the first that does, else of the first sound at all."""
+    first = start = note_onset(levels, threshold_db)
+    while start is not None:
+        later = levels[start + SUSTAIN_MS // WINDOW_MS :][:3]
+        if len(later) and float(np.median(later)) > threshold_db:
+            return start
+        end = start
+        while end < len(levels) and levels[end] > threshold_db:
+            end += 1  # past this sound
+        found = note_onset(levels[end:], threshold_db)
+        start = None if found is None else end + found
+    return first
+
+
 def measure_strike(
-    audio: np.ndarray, sample_rate: int, sos: np.ndarray, margin_db: float
+    audio: np.ndarray, sample_rate: int, sos: np.ndarray, margin_db: float, later_onset: bool = False
 ):
     """Returns (result, peak_db, noise_db) for a recording that starts with PRE_ROLL_MS of
-    silence. result is "hit", "silent", or "too short" (a click that didn't keep sounding)."""
+    silence. result is "hit", "silent", or "too short" (a click that didn't keep sounding).
+
+    With later_onset, a first sound that doesn't keep sounding is taken as the
+    mechanism, and the note is looked for after it. With the pedal down the
+    press can be noisy for long enough to pass as a note's start; for the
+    pedal-down measurements only, so the pedal-up ones are judged as before."""
     weighted = signal.sosfilt(sos, audio)
     levels = window_levels_db(weighted, sample_rate)
     pre = int(PRE_ROLL_MS / WINDOW_MS)
@@ -164,6 +185,8 @@ def measure_strike(
     if not (after > noise_db + margin_db).any():
         return "silent", float(after.max()), noise_db
     onset = note_onset(after, noise_db + margin_db)
+    if later_onset:
+        onset = lasting_onset(after, noise_db + margin_db)
     size = int(sample_rate * WINDOW_MS / 1000)
     if onset is None:  # only brief sounds: the mechanism, or a note cut off at once
         return "too short", sliding_peak_db(weighted[pre * size :], sample_rate), noise_db
@@ -372,10 +395,10 @@ def is_note(lands_ms: int | None) -> bool:
 
 
 def analyse_strike(audio: np.ndarray, sample_rate: int, sos: np.ndarray, margin_db: float,
-                   key: int | None = None) -> Strike:
+                   key: int | None = None, later_onset: bool = False) -> Strike:
     """audio as record_press returns it; the key, if known, sets how the bounce
-    check smooths (see bounce_and_decay)."""
-    result, peak, noise = measure_strike(audio, sample_rate, sos, margin_db)
+    check smooths (see bounce_and_decay). later_onset: see measure_strike."""
+    result, peak, noise = measure_strike(audio, sample_rate, sos, margin_db, later_onset)
     sample_peak = 20 * np.log10(max(float(np.abs(audio).max()), 1e-10))
     if result != "hit":
         return Strike(result, peak, noise, sample_peak, None, False, float("nan"))
@@ -625,6 +648,22 @@ def wait_until_quiet(
 # times, and what it falls back to when the table doesn't say
 # (DriveSettings in include/app/piano/velocity_table.h). calibrate_dynamics.py's
 # settings go into each table's "drive".
+# The sustain pedal, pressed and released as the controller does
+# (SUSTAIN_PEDAL_* in include/app/piano/piano_controller.h).
+PEDAL_CHANNELS = (88, 89)
+PEDAL_PRESS = "100:30:100:30:55"
+PEDAL_RELEASE = "40:40:30:40:0"
+PEDAL_SETTLE_S = 0.6  # after pressing it: down, and its thump died away, before a strike is recorded
+PEDAL_LIFT_S = 0.3  # after releasing it
+
+
+def set_pedal(piano: "Connection", down: bool) -> None:
+    """Presses or releases the sustain pedal, then waits for it to settle."""
+    for channel in PEDAL_CHANNELS:
+        piano.send(f"P:{channel}:{PEDAL_PRESS if down else PEDAL_RELEASE}")
+    time.sleep(PEDAL_SETTLE_S if down else PEDAL_LIFT_S)
+
+
 DEFAULT_DRIVE = {"strike_ms": 50, "coast_duty": 20, "coast_offset_ms": 30, "clamp_offset_ms": -15, "clamp_ms": 0,
                  "clamp_duty": 60, "hold_duty": 25}
 # A key's own settings in its table entry, and the "drive" setting each replaces.

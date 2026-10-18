@@ -42,8 +42,8 @@ static void loadVelocityTable()
     Serial.printf("Velocity table: %s, using the default mapping\n", error.c_str());
     return;
   }
-  Serial.printf("Velocity table: %u keys calibrated, the rest use the default mapping\n",
-                (unsigned)velocityTable.calibratedKeys());
+  Serial.printf("Velocity table: %u keys calibrated (%u with the pedal down too), the rest use the default mapping\n",
+                (unsigned)velocityTable.calibratedKeys(), (unsigned)velocityTable.pedalKeys());
 }
 
 void setup()

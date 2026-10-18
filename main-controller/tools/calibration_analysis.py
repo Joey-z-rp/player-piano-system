@@ -40,9 +40,21 @@ def is_cut_short(rows: list[dict], cut_short_db: float) -> bool:
     )
 
 
-def summarize_key(levels: dict[int, list[dict]], args) -> dict | None:
+def is_one_failed(levels: dict, duties: list, i: int) -> bool:
+    """One strike that failed among at least 2 hits, with the levels either
+    side reliable: a glitch, not where the key stops playing (pedal-down only)."""
+    rows = levels[duties[i]]
+    misses = sum(not r["hit"] for r in rows)
+    either_side = [duties[j] for j in (i - 1, i + 1) if 0 <= j < len(duties)]
+    return (misses == 1 and len(rows) - misses >= 2 and len(either_side) == 2
+            and all(all(r["hit"] for r in levels[d]) for d in either_side))
+
+
+def summarize_key(levels: dict[int, list[dict]], args, pedal: bool = False) -> dict | None:
     """Applies the analysis rules to one key's strikes, grouped by duty.
-    Returns None if the key never played reliably."""
+    Returns None if the key never played reliably. pedal: measured with the
+    pedal down, where a single failed strike between reliable levels is also
+    tolerated (see is_one_failed)."""
     duties = sorted(levels)
     reliable = [d for d in duties if all(r["hit"] for r in levels[d])]
     # min: lowest reliable duty with every level above it also reliable,
@@ -54,7 +66,8 @@ def summarize_key(levels: dict[int, list[dict]], args) -> dict | None:
             continue  # a single search strike says little about reliability
         if duty in reliable:
             threshold = duty
-        elif threshold is not None and is_cut_short(levels[duty], args.cut_short_db):
+        elif threshold is not None and (is_cut_short(levels[duty], args.cut_short_db) or
+                                        (pedal and is_one_failed(levels, duties, duties.index(duty)))):
             cut_short.append(duty)
         else:
             break
@@ -131,7 +144,24 @@ def level_at_duty(summary: dict, duty: float) -> float:
     return float(np.interp(duty, [d for d, _ in curve], [db for _, db in curve]))
 
 
-def build_mapping(by_key: dict[int, dict[int, list[dict]]], args, flags: dict | None = None) -> dict[int, dict]:
+def limit_landing(summary: dict, max_landing_ms: float, resolution: float) -> float | None:
+    """Raises a key's min to the lowest duty whose hammer lands within
+    max_landing_ms (landing falls as the duty rises). Returns the min it had,
+    if it changed."""
+    duties, lands = zip(*summary["landing"])
+    if float(np.interp(summary["min"], duties, lands)) <= max_landing_ms:
+        return None
+    was = summary["min"]
+    duty = was
+    while duty < summary["max"] and float(np.interp(duty, duties, lands)) > max_landing_ms:
+        duty = round(duty + resolution, 2)
+    summary["min"] = duty
+    summary["min_db"] = round(level_at_duty(summary, duty), 2)
+    return was
+
+
+def build_mapping(by_key: dict[int, dict[int, list[dict]]], args, flags: dict | None = None,
+                  pedal: bool = False, max_landing_ms: float | None = None) -> dict[int, dict]:
     """Each key that plays reliably: its summary (see summarize_key), its
     neighbour-smoothed softest and loudest levels, and the duty for each
     velocity 1-127. The softest end is what a key plays at its min duty, not
@@ -140,8 +170,10 @@ def build_mapping(by_key: dict[int, dict[int, list[dict]]], args, flags: dict | 
     median of its neighbours'."""
     summaries = {}
     for key, levels in sorted(by_key.items()):
-        summary = summarize_key(levels, args)
+        summary = summarize_key(levels, args, pedal)
         if summary is not None:
+            if max_landing_ms is not None and summary["landing"]:
+                summary["min_raised_from"] = limit_landing(summary, max_landing_ms, args.cfg.DUTY_RESOLUTION)
             summaries[key] = summary
 
     mapping = {}
@@ -242,6 +274,89 @@ def flight_test_landing(mapping: dict, path: Path) -> tuple[list[int], list[int]
     return [int(np.ceil(v)) for v in np.median(per_key, axis=0)], keys
 
 
+def pedal_entries(args, mapping: dict, up_latest_ms: int | None) -> dict[int, dict]:
+    """Each key measured with the pedal down as well as up: its "pedal" entry.
+    The pedal-down measurements are mapped onto velocities on their own,
+    exactly as the pedal-up ones are (see build_mapping): velocity 1 is the
+    key's softest reliable level with the pedal down, 127 its loudest, each
+    smoothed with its neighbours'. So the two are never compared, and
+    measuring them in different sessions doesn't matter. With the landing
+    times at those duties, and the key's drive with the pedal down. A key's
+    softest notes are left out where they'd land later than
+    PEDAL_MAX_LANDING_MS ("up": up_latest_ms, the latest with the pedal up)."""
+    if not args.pedal_raw.exists():
+        return {}
+    print(f"\nWith the pedal down ({args.pedal_raw.name}):")
+    by_key = load_by_key(args.pedal_raw, args.pedal_recordings, args.margin_db, None, args.cfg.IGNORE_FIRST_STRIKE,
+                         pedal=True)
+    limit = args.cfg.PEDAL_MAX_LANDING_MS
+    limit = up_latest_ms if limit == "up" else limit
+    if limit is not None:
+        print(f"Hammers land within {limit} ms (PEDAL_MAX_LANDING_MS)")
+    down = build_mapping(by_key, args, None, pedal=True, max_landing_ms=limit)
+    entries = {}
+    for key in sorted(by_key):
+        m = down.get(key)
+        landing = own_landing(m) if m is not None else None
+        if key not in mapping or m is None or landing is None:
+            why = ("it isn't calibrated with the pedal up" if key not in mapping else
+                   "it never played reliably" if m is None else "too few landing times")
+            print(f"key {key:2d}: left out, {why} (it plays as with the pedal up)")
+            continue
+        entries[key] = {
+            "duty": m["duties"],
+            "landing_ms": landing,
+            **key_drive(key, args.cfg, pedal=True),
+            "min": m["min"],
+            "max": m["max"],
+            "min_db": m["min_db"],
+            "loud_db": round(m["loud_db"], 2),
+            "smooth_soft_db": round(m["smooth_soft_db"], 2),
+            "smooth_loud_db": round(m["smooth_loud_db"], 2),
+            "offset_db": round(m["offset_db"], 2),
+            "curve": m["curve"],
+        }
+        up = mapping[key]
+        up_landing = own_landing(up)
+        lands = (f", lands {up_landing[0]}->{landing[0]} ms (v1) {up_landing[63]}->{landing[63]} ms (v64)"
+                 if up_landing else "")
+        glitch = f"  (ignored a failed strike at {', '.join(f'{format_duty(d)}%' for d in m['cut_short'])})" \
+            if m["cut_short"] else ""
+        if m.get("min_raised_from") is not None:
+            glitch += f"  (min raised from {format_duty(m['min_raised_from'])}% to land in time)"
+        print(f"key {key:2d}: min {format_duty(up['min'])}->{format_duty(m['min'])}%, duty "
+              f"{format_duty(up['duties'][0])}->{format_duty(m['duties'][0])}% (v1) "
+              f"{format_duty(up['duties'][63])}->{format_duty(m['duties'][63])}% (v64) "
+              f"{format_duty(up['duties'][126])}->{format_duty(m['duties'][126])}% (v127){lands}{glitch}")
+    return entries
+
+
+def draft_pedal_clamps(mapping: dict, pedal: dict, cfg) -> None:
+    """For keys clamped with the pedal up but not yet in PEDAL_BOUNCE_CLAMP: the
+    same sets, starting at the pedal-down duty of the velocity where each set
+    starts with the pedal up. A starting point to check by ear."""
+    lines = []
+    for key in sorted(cfg.BOUNCE_CLAMP):
+        if key not in pedal or key not in mapping or key in cfg.PEDAL_BOUNCE_CLAMP:
+            continue
+        sets = cfg.BOUNCE_CLAMP[key]
+        sets = sorted([sets] if isinstance(sets, tuple) else sets)
+        up, down = mapping[key]["duties"], pedal[key]["duty"]
+        drafted = []
+        for above, offset, ms, duty in sets:
+            first = next((v for v, d in enumerate(up) if d > above), None)  # 0-based velocity
+            if first is None:
+                continue  # never reached
+            start = 0 if first == 0 else round(down[first] - cfg.DUTY_RESOLUTION, 2)
+            drafted.append(f"({start:g}, {offset}, {ms}, {duty})")
+        if drafted:
+            lines.append(f"    {key}: [{', '.join(drafted)}],")
+    if lines:
+        print("\nA draft PEDAL_BOUNCE_CLAMP for keys clamped with the pedal up, starting each set at the same "
+              "velocity (check each by ear with `listen.py crescendo <key> --pedal`):")
+        print("\n".join(lines))
+
+
 def write_table(path: Path, header: dict, entries: dict[int, dict]) -> None:
     """One key per line, so a change shows up clearly in a diff."""
     lines = ["{"] + [f"  {json.dumps(k)}: {json.dumps(v)}," for k, v in header.items()] + ['  "keys": {']
@@ -271,6 +386,12 @@ def update_drive(args) -> None:
         entries[key] = {"duty": rest.pop("duty"), **key_drive(key, args.cfg), **rest}
         if {k: v for k, v in old.items() if k in KEY_DRIVE_FIELDS} != key_drive(key, args.cfg):
             changed.append(key)
+        if "pedal" in old:
+            pedal = {k: v for k, v in old["pedal"].items() if k not in KEY_DRIVE_FIELDS}
+            own = key_drive(key, args.cfg, pedal=True)
+            entries[key]["pedal"] = {"duty": pedal.pop("duty"), "landing_ms": pedal.pop("landing_ms"), **own, **pedal}
+            if {k: v for k, v in old["pedal"].items() if k in KEY_DRIVE_FIELDS} != own and key not in changed:
+                changed.append(key)
     write_table(args.out, header, entries)
     print(f"drive: {header['drive']}")
     print(f"keys whose own drive settings changed: {', '.join(map(str, changed)) or 'none'}")
@@ -285,11 +406,15 @@ def table(args) -> None:
         update_drive(args)
         return
     flags = load_flags(args.flags)
-    by_key = load_by_key(args.raw, args.recordings, args.margin_db, flags, args.cfg.IGNORE_FIRST_STRIKE)
+    by_key = load_by_key(args.raw, args.recordings, args.margin_db, flags, args.cfg.IGNORE_FIRST_STRIKE,
+                         pedal=args.pedal)
     mapping = build_mapping(by_key, args, flags)
     print_key_log(by_key, mapping)
 
     own = {key: own_landing(m) for key, m in mapping.items()}
+    up_latest = max((max(v) for v in own.values() if v), default=None)
+    pedal = pedal_entries(args, mapping, up_latest)
+    draft_pedal_clamps(mapping, pedal, args.cfg)
 
     def entry(key: int, m: dict) -> dict:
         return {
@@ -306,6 +431,7 @@ def table(args) -> None:
             "smooth_loud_db": round(m["smooth_loud_db"], 2),
             "offset_db": round(m["offset_db"], 2),
             "curve": m["curve"],
+            **({"pedal": pedal[key]} if key in pedal else {}),
         }
 
     header = {
@@ -339,7 +465,8 @@ def table(args) -> None:
         header["landing_ms"] = shared
         print(f"  shared curve: {shared[0]} ms at velocity 1, {shared[63]} ms at 64, {shared[-1]} ms at 127")
     write_table(args.out, header, {key: entry(key, m) for key, m in mapping.items()})
-    print(f"wrote {args.out} ({len(mapping)} keys; others play the default mapping)")
+    print(f"wrote {args.out} ({len(mapping)} keys, {len(pedal)} with the pedal down too; "
+          "others play the default mapping)")
     print("upload it to the controller with: pio run -t uploadfs")
 
 
@@ -347,7 +474,8 @@ def report(args) -> None:
     """Writes a page of charts of the calibration and the velocity mapping
     (calibration_report.html filled with this data) and opens it."""
     flags = load_flags(args.flags)
-    by_key = load_by_key(args.raw, args.recordings, args.margin_db, flags, args.cfg.IGNORE_FIRST_STRIKE)
+    by_key = load_by_key(args.raw, args.recordings, args.margin_db, flags, args.cfg.IGNORE_FIRST_STRIKE,
+                         pedal=args.pedal)
     mapping = build_mapping(by_key, args, flags)
     levels_out, keys_out = [], []
     for key, levels in sorted(by_key.items()):
