@@ -251,7 +251,7 @@ void test_volume_scales_velocities()
 {
   TEST_ASSERT_TRUE(buildPianoRoll({on(0, C4, 100), on(0, D4, 40), off(500, C4), off(500, D4)}, roll, nullptr, 80));
   assertRoll({{0, PRESS, C4_KEY, 80}, {0, PRESS, D4_KEY, 32}, {500, RELEASE, C4_KEY, 0}, {500, RELEASE, D4_KEY, 0}});
-  TEST_ASSERT_EQUAL_UINT16(80, roll.volume);
+  TEST_ASSERT_EQUAL_UINT16(80, roll.dynamics.volume);
 }
 
 void test_volume_stays_within_1_and_127()
@@ -568,6 +568,117 @@ void test_pedal_counts_only_once_the_dampers_are_surely_up()
   TEST_ASSERT_TRUE(pressedWithPedal()); // lifts as it sounds: the key's travel is over
 }
 
+// --- dynamics ---
+
+static MidiEvent onIn(uint8_t part, uint32_t timeMs, uint8_t note, uint8_t velocity)
+{
+  return {timeMs, MidiEventType::NoteOn, note, velocity, part};
+}
+
+static std::vector<uint8_t> pressVelocities()
+{
+  std::vector<uint8_t> velocities;
+  for (const RollEvent &event : roll.events)
+  {
+    if (event.type == RollEventType::KeyPress)
+    {
+      velocities.push_back(event.velocity);
+    }
+  }
+  return velocities;
+}
+
+static void buildWith(std::vector<MidiEvent> events, const Dynamics &dynamics)
+{
+  TEST_ASSERT_TRUE(buildPianoRoll(events, roll, nullptr, dynamics));
+}
+
+void test_part_offsets_move_each_part()
+{
+  Dynamics dynamics;
+  dynamics.partOffset[0] = 10;
+  dynamics.partOffset[1] = -10;
+  buildWith({onIn(0, 0, C4, 60), off(500, C4), onIn(1, 1000, D4, 60), off(1500, D4)}, dynamics);
+  std::vector<uint8_t> velocities = pressVelocities();
+  TEST_ASSERT_EQUAL_UINT8(70, velocities[0]);
+  TEST_ASSERT_EQUAL_UINT8(50, velocities[1]);
+}
+
+void test_voicing_stretches_each_chord_around_its_average()
+{
+  // C4 and D4 start 30 ms apart: one chord (average 70). E4 at 1000 is alone.
+  const uint8_t E4 = 64;
+  Dynamics dynamics;
+  dynamics.voicing = 200;
+  buildWith({on(0, C4, 60), on(30, D4, 80), off(500, C4), off(500, D4), on(1000, E4, 90), off(1500, E4)}, dynamics);
+  std::vector<uint8_t> velocities = pressVelocities();
+  TEST_ASSERT_EQUAL_UINT8(50, velocities[0]);
+  TEST_ASSERT_EQUAL_UINT8(90, velocities[1]);
+  TEST_ASSERT_EQUAL_UINT8(90, velocities[2]); // unchanged
+}
+
+void test_voicing_chords_are_measured_from_their_first_note()
+{
+  // 0, 30, 60: the third is 60 ms after the first, so it's not in that chord.
+  const uint8_t E4 = 64;
+  Dynamics dynamics;
+  dynamics.voicing = 200;
+  buildWith({on(0, C4, 60), on(30, D4, 80), on(60, E4, 100), off(500, C4), off(500, D4), off(500, E4)}, dynamics);
+  std::vector<uint8_t> velocities = pressVelocities();
+  TEST_ASSERT_EQUAL_UINT8(50, velocities[0]);
+  TEST_ASSERT_EQUAL_UINT8(90, velocities[1]);
+  TEST_ASSERT_EQUAL_UINT8(100, velocities[2]);
+}
+
+void test_contrast_stretches_around_the_median()
+{
+  const uint8_t E4 = 64;
+  Dynamics dynamics;
+  dynamics.contrast = 150;
+  buildWith({on(0, C4, 40), off(200, C4), on(1000, D4, 60), off(1200, D4), on(2000, E4, 80), off(2200, E4)},
+            dynamics);
+  std::vector<uint8_t> velocities = pressVelocities();
+  TEST_ASSERT_EQUAL_UINT8(30, velocities[0]);
+  TEST_ASSERT_EQUAL_UINT8(60, velocities[1]);
+  TEST_ASSERT_EQUAL_UINT8(90, velocities[2]);
+}
+
+void test_dynamics_apply_in_order_and_round_once()
+{
+  // Offset +10: 50, 70 (one chord). Voicing 150: 45, 75. Contrast 200 around
+  // their median 60: 30, 90. Volume 50: 15, 45.
+  Dynamics dynamics;
+  dynamics.partOffset[0] = 10;
+  dynamics.voicing = 150;
+  dynamics.contrast = 200;
+  dynamics.volume = 50;
+  buildWith({on(0, C4, 40), on(0, D4, 60), off(500, C4), off(500, D4)}, dynamics);
+  std::vector<uint8_t> velocities = pressVelocities();
+  TEST_ASSERT_EQUAL_UINT8(15, velocities[0]);
+  TEST_ASSERT_EQUAL_UINT8(45, velocities[1]);
+}
+
+void test_dynamics_stay_within_1_and_127()
+{
+  Dynamics dynamics;
+  dynamics.contrast = 300;
+  TEST_ASSERT_TRUE(buildPianoRoll({on(0, C4, 10), off(200, C4), on(1000, D4, 64), off(1200, D4), on(2000, C4, 120),
+                                   off(2200, C4)},
+                                  roll, nullptr, dynamics, &report));
+  TEST_ASSERT_EQUAL_UINT8(1, report.notes[0].playedVelocity);
+  TEST_ASSERT_EQUAL(NOTE_VELOCITY_LIMITED, report.notes[0].changes);
+  TEST_ASSERT_EQUAL_UINT8(127, report.notes[2].playedVelocity);
+  TEST_ASSERT_EQUAL(0, report.notes[1].changes);
+  TEST_ASSERT_EQUAL_UINT16(300, roll.dynamics.contrast);
+}
+
+void test_report_says_each_notes_part()
+{
+  buildReport({onIn(0, 0, C4, 60), off(500, C4), onIn(1, 1000, D4, 60), off(1500, D4)});
+  TEST_ASSERT_EQUAL_UINT8(0, report.notes[0].part);
+  TEST_ASSERT_EQUAL_UINT8(1, report.notes[1].part);
+}
+
 int main()
 {
   UNITY_BEGIN();
@@ -615,5 +726,12 @@ int main()
   RUN_TEST(test_duplicate_note_is_played_once_and_reported_apart);
   RUN_TEST(test_notes_under_the_pedal_use_its_landing_times);
   RUN_TEST(test_pedal_counts_only_once_the_dampers_are_surely_up);
+  RUN_TEST(test_part_offsets_move_each_part);
+  RUN_TEST(test_voicing_stretches_each_chord_around_its_average);
+  RUN_TEST(test_voicing_chords_are_measured_from_their_first_note);
+  RUN_TEST(test_contrast_stretches_around_the_median);
+  RUN_TEST(test_dynamics_apply_in_order_and_round_once);
+  RUN_TEST(test_dynamics_stay_within_1_and_127);
+  RUN_TEST(test_report_says_each_notes_part);
   return UNITY_END();
 }

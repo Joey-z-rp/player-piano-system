@@ -7,6 +7,7 @@
 #include <stdint.h>
 #include <initializer_list>
 #include <utility>
+#include <string>
 #include <vector>
 
 typedef std::vector<uint8_t> Bytes;
@@ -69,6 +70,15 @@ public:
   {
     return at(tick, {0xFF, 0x51, 0x03, (uint8_t)(usPerQuarter >> 16), (uint8_t)(usPerQuarter >> 8),
                      (uint8_t)usPerQuarter});
+  }
+
+  TrackBuilder &name(uint32_t tick, const std::string &text)
+  {
+    appendVarLen(body, tick - lastTick);
+    body.insert(body.end(), {0xFF, 0x03, (uint8_t)text.size()});
+    body.insert(body.end(), text.begin(), text.end());
+    lastTick = tick;
+    return *this;
   }
 
   Bytes build(bool endOfTrack = true) const

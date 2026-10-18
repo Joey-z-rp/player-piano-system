@@ -9,7 +9,14 @@ const message = document.getElementById("message");
 const volume = document.getElementById("volume");
 const volumeValue = document.getElementById("volume-value");
 const volumeNote = document.getElementById("volume-note");
-let volumeChanging = false; // while dragging, don't let refresh() move the slider
+const contrast = document.getElementById("contrast");
+const contrastValue = document.getElementById("contrast-value");
+const voicing = document.getElementById("voicing");
+const voicingValue = document.getElementById("voicing-value");
+const partsSection = document.getElementById("parts");
+const partsList = document.getElementById("parts-list");
+const resetButton = document.getElementById("dynamics-reset");
+let dynamicsChanging = false; // while changing them, don't let refresh() move the sliders
 // The position bar: drag it to choose where Play starts, or to jump while playing.
 let startFrom = 0; // ms on the piece's timeline where Play starts
 let seeking = false; // while dragging, don't let refresh() move the bar
@@ -17,27 +24,82 @@ let playing = false;
 let paused = false; // every key up; Play goes on from there
 let durationMs = 0;
 
-// ---- the piece's velocities, as written and at the slider's volume ----
+// ---- the piece's velocities, as written and with the dynamics settings ----
 const velocitySection = document.getElementById("velocities");
 const velocityChart = document.getElementById("velocity-chart");
-let written = null; // notes at each velocity 1-127, as written
+const velocityLow = document.getElementById("velocity-low");
+let pieceNotes = null; // [{on, velocity, part}] as written, from the note view
+let partInfo = []; // the piece's parts, from /api/piece
+let partOffsets = []; // velocities added to each part
 let loadedPiece = "";
-const BIN = 6; // velocities per bar (narrower bars zig-zag as the volume rounds velocities)
+const BIN = 6; // velocities per bar (narrower bars zig-zag as the settings round velocities)
+const CHORD_WINDOW_MS = 40; // as roll_builder.h's CHORD_WINDOW_MS
+const LOW_VELOCITY = 20; // below this, a few keys can be weak or miss
 
-// As the controller scales them (roll_builder.cpp scaleVelocities).
-function scaled(velocity, percent) {
-  return Math.min(
-    127,
-    Math.max(1, Math.floor((velocity * percent + 50) / 100)),
-  );
+function settings() {
+  return {
+    volume: Number(volume.value),
+    contrast: Number(contrast.value),
+    voicing: Number(voicing.value),
+    parts: partOffsets.slice(),
+  };
 }
 
-function played(percent) {
+// As the controller shapes them (roll_builder.cpp shapeVelocities): each
+// part's offset, then voicing within each chord, then contrast around the
+// piece's median, then volume; rounded once and kept within 1-127. notes are
+// in the order they're written.
+function shapeVelocities(notes, s) {
+  const shaped = notes.map((n) => n.velocity + (s.parts[n.part] || 0));
+  if (s.voicing !== 100) {
+    for (let first = 0; first < notes.length; ) {
+      let end = first + 1;
+      while (end < notes.length && notes[end].on - notes[first].on < CHORD_WINDOW_MS) end++;
+      if (end - first > 1) {
+        let average = 0;
+        for (let i = first; i < end; i++) average += shaped[i];
+        average /= end - first;
+        for (let i = first; i < end; i++) {
+          shaped[i] = average + ((shaped[i] - average) * s.voicing) / 100;
+        }
+      }
+      first = end;
+    }
+  }
+  if (s.contrast !== 100 && shaped.length) {
+    const sorted = shaped.slice().sort((a, b) => a - b);
+    const middle = Math.floor(sorted.length / 2);
+    const median = sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
+    for (let i = 0; i < shaped.length; i++) {
+      shaped[i] = median + ((shaped[i] - median) * s.contrast) / 100;
+    }
+  }
+  return shaped.map((v) => Math.min(127, Math.max(1, Math.floor((v * s.volume + 50) / 100))));
+}
+
+function histogram(velocities) {
   const counts = new Array(127).fill(0);
-  written.forEach((count, i) => {
-    counts[scaled(i + 1, percent) - 1] += count;
-  });
+  velocities.forEach((v) => counts[v - 1]++);
   return counts;
+}
+
+// The notes the controller shapes, from the note view's list: a note the file
+// has twice at once is shaped once, at the louder of the two velocities.
+function shapedNotes(notes) {
+  const DUPLICATE = 32, MERGED = 1;
+  const twin = (n) => (n.changes & DUPLICATE) || ((n.changes & MERGED) && n.mergedInto === n.on);
+  const louder = new Map();
+  notes.filter(twin).forEach((n) => {
+    const key = n.key + "/" + n.on;
+    louder.set(key, Math.max(louder.get(key) || 0, n.writtenVelocity));
+  });
+  return notes
+    .filter((n) => !twin(n))
+    .map((n) => ({
+      on: n.on,
+      velocity: Math.max(n.writtenVelocity, louder.get(n.key + "/" + n.on) || 0),
+      part: n.part,
+    }));
 }
 
 function describe(counts) {
@@ -73,11 +135,19 @@ function svgEl(name, attrs) {
 }
 
 function drawVelocities() {
-  if (!written) return;
-  const percent = Number(volume.value);
-  const now = played(percent);
+  if (!pieceNotes) return;
+  const shaped = shapeVelocities(pieceNotes, settings());
+  const written = histogram(pieceNotes.map((n) => n.velocity));
+  const now = histogram(shaped);
   const a = describe(written),
     b = describe(now);
+  const lowBefore = pieceNotes.filter((n) => n.velocity < LOW_VELOCITY).length;
+  const lowNow = shaped.filter((v) => v < LOW_VELOCITY).length;
+  velocityLow.textContent = lowNow
+    ? `${lowNow} ${lowNow === 1 ? "note" : "notes"} below velocity ${LOW_VELOCITY}` +
+      (lowNow !== lowBefore ? ` (${lowBefore} as written)` : "") +
+      ": a few keys can be weak or miss down there"
+    : "";
   const writtenBins = bins(written),
     playedBins = bins(now);
 
@@ -96,7 +166,7 @@ function drawVelocities() {
   const svg = svgEl("svg", {
     viewBox: `0 0 ${W} ${H}`,
     role: "img",
-    "aria-label": `Notes by velocity: as written ${a.lowest} to ${a.highest}, at ${percent}% ${b.lowest} to ${b.highest}`,
+    "aria-label": `Notes by velocity: as written ${a.lowest} to ${a.highest}, with these settings ${b.lowest} to ${b.highest}`,
   });
   svg.append(
     svgEl("line", {
@@ -198,7 +268,7 @@ function drawVelocities() {
       fill: "transparent",
     });
     hit.addEventListener("pointerenter", () => {
-      tip.textContent = `velocity ${bin.from}-${bin.to}: ${bin.count} as written, ${playedBins[i].count} at ${percent}%`;
+      tip.textContent = `velocity ${bin.from}-${bin.to}: ${bin.count} as written, ${playedBins[i].count} with these settings`;
       tip.hidden = false;
       const x = m.left + i * slot + slot / 2;
       tip.style.left =
@@ -216,16 +286,65 @@ function drawVelocities() {
   velocityChart.replaceChildren(svg, tip);
 }
 
-async function loadVelocities() {
+// The piece's parts, and their offsets, for the tracks list.
+async function loadPiece() {
+  let parts = [], offsets = [];
   try {
-    const response = await fetch("/api/piece");
-    written = response.ok ? (await response.json()).velocities : null;
+    const [piece, dynamics] = await Promise.all([fetch("/api/piece"), fetch("/api/dynamics")]);
+    parts = piece.ok ? (await piece.json()).parts || [] : [];
+    offsets = dynamics.ok ? (await dynamics.json()).parts || [] : [];
   } catch (error) {
-    written = null;
+    parts = [];
   }
-  velocitySection.hidden = !written;
+  partInfo = parts;
+  partOffsets = parts.map((_, i) => offsets[i] || 0);
+  showParts();
   drawVelocities();
 }
+
+const NAMES = ["C", "C♯", "D", "E♭", "E", "F", "F♯", "G", "A♭", "A", "B♭", "B"];
+const noteName = (midi) => NAMES[midi % 12] + (Math.floor(midi / 12) - 1);
+
+// One row per part, when the file has more than one, each with its offset.
+function showParts() {
+  const shown = partInfo.filter((p) => p.notes > 0).length > 1;
+  partsSection.hidden = !shown;
+  noteView.setPartCount(shown ? partInfo.length : 0);
+  if (!shown) return;
+  partsList.replaceChildren(
+    ...partInfo.map((part, i) => {
+      const row = document.createElement("div");
+      row.className = "part";
+      const swatch = document.createElement("i");
+      swatch.className = "swatch";
+      swatch.style.borderColor = noteView.partColor(i);
+      const label = document.createElement("span");
+      label.className = "part-name";
+      label.textContent = part.notes
+        ? `${part.name}: ${part.notes} notes, ${noteName(part.low)}-${noteName(part.high)}, typically ${part.velocity}`
+        : `${part.name}: no notes on the keys`;
+      const slider = document.createElement("input");
+      Object.assign(slider, { type: "range", min: -20, max: 20, step: 1, value: partOffsets[i] });
+      slider.setAttribute("aria-label", part.name + " offset");
+      const value = document.createElement("output");
+      const show = () => (value.textContent = (partOffsets[i] > 0 ? "+" : "") + partOffsets[i]);
+      show();
+      slider.addEventListener("input", () => {
+        partOffsets[i] = Number(slider.value);
+        show();
+        dynamicsChanged();
+      });
+      row.append(swatch, label, slider, value);
+      return row;
+    }),
+  );
+}
+
+noteView.onLoaded((notes) => {
+  pieceNotes = notes ? shapedNotes(notes) : null;
+  velocitySection.hidden = !pieceNotes;
+  drawVelocities();
+});
 window.addEventListener("resize", drawVelocities);
 
 function formatTime(ms) {
@@ -321,27 +440,43 @@ stopButton.addEventListener("click", async () => {
   refresh();
 });
 
-// Every velocity is scaled by the volume; it applies from the next Play.
-let volumeTimer;
-volume.addEventListener("input", () => {
-  volumeChanging = true;
+// Volume, contrast, voicing and each part's offset shape every velocity;
+// they apply from the next Play.
+function showDynamics() {
   volumeValue.textContent = volume.value + "%";
+  contrastValue.textContent = contrast.value + "%";
+  voicingValue.textContent = voicing.value + "%";
+}
+
+let dynamicsTimer;
+function dynamicsChanged() {
+  dynamicsChanging = true;
+  showDynamics();
   drawVelocities();
-  clearTimeout(volumeTimer);
-  volumeTimer = setTimeout(async () => {
-    const saved = await request("/api/volume", {
+  clearTimeout(dynamicsTimer);
+  dynamicsTimer = setTimeout(async () => {
+    const saved = await request("/api/dynamics", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ volume: Number(volume.value) }),
+      body: JSON.stringify(settings()),
     });
-    volumeChanging = false;
+    dynamicsChanging = false;
     if (saved) {
-      noteView.load(); // merges and limits depend on the volume
-      volumeNote.textContent = playing
-        ? "applies from the next Play, or after a pause"
-        : "";
+      noteView.load(); // merges and limits depend on the velocities
+      volumeNote.textContent = playing ? "applies from the next Play, or after a pause" : "";
     }
   }, 300);
+}
+
+[volume, contrast, voicing].forEach((slider) => slider.addEventListener("input", dynamicsChanged));
+
+resetButton.addEventListener("click", () => {
+  volume.value = 100;
+  contrast.value = 100;
+  voicing.value = 100;
+  partOffsets = partOffsets.map(() => 0);
+  showParts();
+  dynamicsChanged();
 });
 
 async function refresh() {
@@ -363,16 +498,16 @@ async function refresh() {
     startFrom = 0; // stopped or finished: the next Play starts from the beginning
   }
   if (wasPlaying && !playing) {
-    noteView.load(); // shows the current volume again, if it was changed while playing
+    noteView.load(); // shows the current settings again, if they were changed while playing
   }
-  if (
-    !volumeChanging &&
-    status.volume !== undefined &&
-    Number(volume.value) !== status.volume
-  ) {
-    volume.value = status.volume;
-    volumeValue.textContent = status.volume + "%";
-    drawVelocities();
+  if (!dynamicsChanging && status.volume !== undefined) {
+    const now = [Number(volume.value), Number(contrast.value), Number(voicing.value)];
+    const saved = [status.volume, status.contrast ?? 100, status.voicing ?? 100];
+    if (now.some((v, i) => v !== saved[i])) {
+      [volume.value, contrast.value, voicing.value] = saved;
+      showDynamics();
+      drawVelocities();
+    }
   }
   const pieceKey = playback.piece
     ? playback.piece.title + "/" + playback.piece.notes
@@ -380,7 +515,8 @@ async function refresh() {
   if (pieceKey !== loadedPiece) {
     loadedPiece = pieceKey;
     startFrom = 0;
-    loadVelocities();
+    pieceNotes = null;
+    loadPiece();
     noteView.load();
   }
   if (!playing) {

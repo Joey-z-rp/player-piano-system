@@ -6,15 +6,18 @@
 #include <esp_timer.h>
 #include <freertos/task.h>
 
-static const uint32_t PLAYER_TASK_STACK = 8192; // rebuilds a piece for a new volume
+static const uint32_t PLAYER_TASK_STACK = 8192; // rebuilds a piece for new dynamics
 static const char SETTINGS_NAMESPACE[] = "piano";
 static const char VOLUME_KEY[] = "volume";
+static const char CONTRAST_KEY[] = "contrast";
+static const char VOICING_KEY[] = "voicing";
 static const UBaseType_t PLAYER_TASK_PRIORITY = 3; // above loop()
 static const BaseType_t PLAYER_TASK_CORE = 1;      // Wi-Fi runs on core 0
 
 PianoController::PianoController()
     : rs485(nullptr), velocityTable(nullptr), messageQueue(nullptr), state(PlaybackState::Idle),
-      volumePercent(DEFAULT_VOLUME), playStartMs(0), pausedAtMs(0),
+      volumePercent(DEFAULT_VOLUME), contrastPercent(100), voicingPercent(100), partOffsets(), playStartMs(0),
+      pausedAtMs(0),
       nextEvent(0), startUs(0), nextSkipped(0)
 {
 }
@@ -28,6 +31,10 @@ bool PianoController::init(Rs485Module *rs485, const VelocityTable *velocityTabl
   {
     uint16_t saved = settings.getUShort(VOLUME_KEY, DEFAULT_VOLUME);
     volumePercent = (saved >= MIN_VOLUME && saved <= MAX_VOLUME) ? saved : DEFAULT_VOLUME;
+    saved = settings.getUShort(CONTRAST_KEY, 100);
+    contrastPercent = (saved >= MIN_CONTRAST && saved <= MAX_CONTRAST) ? saved : 100;
+    saved = settings.getUShort(VOICING_KEY, 100);
+    voicingPercent = (saved >= MIN_VOICING && saved <= MAX_VOICING) ? saved : 100;
     settings.end();
   }
   messageQueue = xQueueCreate(DRIVER_COMMAND_QUEUE_LENGTH, sizeof(Message));
@@ -60,6 +67,10 @@ PlaybackResult PianoController::loadRoll(std::shared_ptr<const PianoRoll> roll)
     return PlaybackResult::Busy;
   }
   loadedRoll = roll;
+  for (std::atomic<int8_t> &offset : partOffsets)
+  {
+    offset = 0; // a new piece starts with its parts as written
+  }
   return PlaybackResult::Ok;
 }
 
@@ -181,6 +192,61 @@ uint16_t PianoController::volume() const
   return volumePercent;
 }
 
+static void saveSetting(const char *key, uint16_t value)
+{
+  Preferences settings;
+  if (settings.begin(SETTINGS_NAMESPACE, false))
+  {
+    settings.putUShort(key, value);
+    settings.end();
+  }
+}
+
+bool PianoController::setContrast(uint16_t percent)
+{
+  if (percent < MIN_CONTRAST || percent > MAX_CONTRAST)
+  {
+    return false;
+  }
+  contrastPercent = percent;
+  saveSetting(CONTRAST_KEY, percent);
+  return true;
+}
+
+bool PianoController::setVoicing(uint16_t percent)
+{
+  if (percent < MIN_VOICING || percent > MAX_VOICING)
+  {
+    return false;
+  }
+  voicingPercent = percent;
+  saveSetting(VOICING_KEY, percent);
+  return true;
+}
+
+bool PianoController::setPartOffset(uint8_t part, int8_t velocities)
+{
+  if (part >= MAX_MIDI_PARTS || velocities < -MAX_PART_OFFSET || velocities > MAX_PART_OFFSET)
+  {
+    return false;
+  }
+  partOffsets[part] = velocities;
+  return true;
+}
+
+Dynamics PianoController::dynamics() const
+{
+  Dynamics now;
+  now.volume = volumePercent;
+  now.contrast = contrastPercent;
+  now.voicing = voicingPercent;
+  for (uint8_t part = 0; part < MAX_MIDI_PARTS; part++)
+  {
+    now.partOffset[part] = partOffsets[part];
+  }
+  return now;
+}
+
 size_t PianoController::pendingCommands() const
 {
   return messageQueue == nullptr ? 0 : uxQueueMessagesWaiting(messageQueue);
@@ -297,39 +363,41 @@ void PianoController::restartDrivers()
   Serial.println("Drivers restarted");
 }
 
-// Builds the loaded piece again if the volume has changed since it was
+// Builds the loaded piece again if the dynamics have changed since it was
 // built, from the MIDI it came from.
-void PianoController::rebuildForVolume()
+void PianoController::rebuildForDynamics()
 {
   std::shared_ptr<const PianoRoll> loaded;
   {
     std::lock_guard<std::mutex> lock(rollMutex);
     loaded = loadedRoll;
   }
-  uint16_t volume = volumePercent;
-  if (loaded == nullptr || loaded->source == nullptr || loaded->volume == volume)
+  Dynamics now = dynamics();
+  if (loaded == nullptr || loaded->source == nullptr || loaded->dynamics == now)
   {
     return;
   }
   std::shared_ptr<PianoRoll> rebuilt = std::make_shared<PianoRoll>();
-  if (!buildPianoRoll(*loaded->source, *rebuilt, velocityTable, volume))
+  if (!buildPianoRoll(*loaded->source, *rebuilt, velocityTable, now))
   {
-    Serial.println("Out of memory rebuilding for the new volume: playing at the old one");
+    Serial.println("Out of memory rebuilding for the new dynamics: playing as before");
     return;
   }
   rebuilt->title = loaded->title;
   rebuilt->source = loaded->source;
+  rebuilt->partNames = loaded->partNames;
   std::lock_guard<std::mutex> lock(rollMutex);
   if (loadedRoll == loaded) // not replaced by an upload meanwhile
   {
     loadedRoll = rebuilt;
   }
-  Serial.printf("Rebuilt \"%s\" for volume %u%%\n", rebuilt->title.c_str(), volume);
+  Serial.printf("Rebuilt \"%s\" for volume %u%%, contrast %u%%, voicing %u%%\n", rebuilt->title.c_str(), now.volume,
+                now.contrast, now.voicing);
 }
 
 void PianoController::startPlayback(uint32_t fromMs)
 {
-  rebuildForVolume();
+  rebuildForDynamics();
   restartDrivers();
 
   // Take the roll and mark it playing under one lock, so loadRoll() can't
@@ -348,11 +416,11 @@ void PianoController::startPlayback(uint32_t fromMs)
   playFrom(fromMs);
 }
 
-// Goes on from a pause, with the piece rebuilt if the volume has changed.
+// Goes on from a pause, with the piece rebuilt if the dynamics have changed.
 // Every key is already up.
 void PianoController::resumePlayback(uint32_t fromMs)
 {
-  rebuildForVolume();
+  rebuildForDynamics();
   {
     std::lock_guard<std::mutex> lock(rollMutex);
     if (loadedRoll == nullptr)

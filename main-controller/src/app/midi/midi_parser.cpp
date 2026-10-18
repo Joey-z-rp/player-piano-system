@@ -28,9 +28,11 @@ struct RawEvent
   uint32_t value; // tempo (us per quarter), velocity, or controller value
   RawKind kind;
   uint8_t note;
+  uint16_t source; // note events: track * 16 + channel
 };
 
-bool parseTrack(ByteReader track, std::vector<RawEvent> &raw, std::string &error)
+bool parseTrack(ByteReader track, uint16_t trackIndex, std::vector<RawEvent> &raw, std::string &name,
+                std::string &error)
 {
   uint32_t tick = 0;
   uint8_t runningStatus = 0;
@@ -82,7 +84,24 @@ bool parseTrack(ByteReader track, std::vector<RawEvent> &raw, std::string &error
           error = "truncated tempo event";
           return false;
         }
-        raw.push_back({tick, ((uint32_t)b0 << 16) | ((uint32_t)b1 << 8) | b2, RawKind::Tempo, 0});
+        raw.push_back({tick, ((uint32_t)b0 << 16) | ((uint32_t)b1 << 8) | b2, RawKind::Tempo, 0, 0});
+      }
+      else if (metaType == 0x03 && name.empty())
+      {
+        // The track's name.
+        for (uint32_t i = 0; i < metaLength; i++)
+        {
+          uint8_t c;
+          if (!track.u8(c))
+          {
+            error = "truncated meta event";
+            return false;
+          }
+          if (c >= 0x20 && c < 0x7F && name.size() < 40)
+          {
+            name += (char)c;
+          }
+        }
       }
       else if (!track.skip(metaLength))
       {
@@ -125,17 +144,18 @@ bool parseTrack(ByteReader track, std::vector<RawEvent> &raw, std::string &error
     {
       continue;
     }
+    uint16_t source = (uint16_t)(trackIndex * 16 + channel);
     if (type == 0x90 && data2 > 0)
     {
-      raw.push_back({tick, data2, RawKind::NoteOn, data1});
+      raw.push_back({tick, data2, RawKind::NoteOn, data1, source});
     }
     else if (type == 0x80 || type == 0x90)
     {
-      raw.push_back({tick, 0, RawKind::NoteOff, data1});
+      raw.push_back({tick, 0, RawKind::NoteOff, data1, source});
     }
     else if (type == 0xB0 && data1 == SUSTAIN_CONTROLLER)
     {
-      raw.push_back({tick, data2, RawKind::Sustain, 0});
+      raw.push_back({tick, data2, RawKind::Sustain, 0, 0});
     }
   }
 
@@ -143,7 +163,8 @@ bool parseTrack(ByteReader track, std::vector<RawEvent> &raw, std::string &error
   return true;
 }
 
-bool readTracks(ByteReader file, uint16_t &division, std::vector<RawEvent> &raw, std::string &error)
+bool readTracks(ByteReader file, uint16_t &division, std::vector<RawEvent> &raw, std::vector<std::string> &trackNames,
+                std::string &error)
 {
   uint32_t chunkId, chunkLength;
   uint16_t format, trackCount;
@@ -191,7 +212,8 @@ bool readTracks(ByteReader file, uint16_t &division, std::vector<RawEvent> &raw,
     {
       continue; // unknown chunks are skipped, per the spec
     }
-    if (!parseTrack(chunk, raw, error))
+    trackNames.emplace_back();
+    if (!parseTrack(chunk, tracksRead, raw, trackNames.back(), error))
     {
       error = "track " + std::to_string(tracksRead) + ": " + error;
       return false;
@@ -265,7 +287,10 @@ private:
 };
 
 // Merges all tracks into one timeline and converts ticks to milliseconds.
-void toTimeline(uint16_t division, std::vector<RawEvent> &raw, std::vector<MidiEvent> &events)
+// Each track and channel with notes becomes a part, numbered in the order
+// they first play, and named in partNames.
+void toTimeline(uint16_t division, std::vector<RawEvent> &raw, std::vector<MidiEvent> &events,
+                const std::vector<std::string> &trackNames, std::vector<std::string> &partNames)
 {
   std::stable_sort(raw.begin(), raw.end(), [](const RawEvent &a, const RawEvent &b) {
     if (a.tick != b.tick)
@@ -274,6 +299,34 @@ void toTimeline(uint16_t division, std::vector<RawEvent> &raw, std::vector<MidiE
     }
     return a.kind < b.kind;
   });
+
+  std::vector<uint16_t> sources; // each part's track * 16 + channel
+  for (const RawEvent &event : raw)
+  {
+    if (event.kind == RawKind::NoteOn && sources.size() < MAX_MIDI_PARTS &&
+        std::find(sources.begin(), sources.end(), event.source) == sources.end())
+    {
+      sources.push_back(event.source);
+    }
+  }
+  auto partOf = [&sources](uint16_t source) -> uint8_t {
+    auto found = std::find(sources.begin(), sources.end(), source);
+    return found == sources.end() ? (uint8_t)(MAX_MIDI_PARTS - 1) : (uint8_t)(found - sources.begin());
+  };
+  partNames.clear();
+  for (uint16_t source : sources)
+  {
+    uint16_t track = source / 16;
+    bool otherChannels = std::any_of(sources.begin(), sources.end(),
+                                     [&](uint16_t other) { return other != source && other / 16 == track; });
+    std::string name = track < trackNames.size() && !trackNames[track].empty() ? trackNames[track]
+                                                                               : "Track " + std::to_string(track + 1);
+    if (otherChannels)
+    {
+      name += " ch " + std::to_string(source % 16 + 1);
+    }
+    partNames.push_back(name);
+  }
 
   TickClock clock(division);
   events.reserve(raw.size());
@@ -286,20 +339,21 @@ void toTimeline(uint16_t division, std::vector<RawEvent> &raw, std::vector<MidiE
       clock.setTempo(event.tick, event.value);
       break;
     case RawKind::NoteOff:
-      events.push_back({timeMs, MidiEventType::NoteOff, event.note, 0});
+      events.push_back({timeMs, MidiEventType::NoteOff, event.note, 0, partOf(event.source)});
       break;
     case RawKind::Sustain:
-      events.push_back({timeMs, MidiEventType::Sustain, 0, (uint8_t)event.value});
+      events.push_back({timeMs, MidiEventType::Sustain, 0, (uint8_t)event.value, 0});
       break;
     case RawKind::NoteOn:
-      events.push_back({timeMs, MidiEventType::NoteOn, event.note, (uint8_t)event.value});
+      events.push_back({timeMs, MidiEventType::NoteOn, event.note, (uint8_t)event.value, partOf(event.source)});
       break;
     }
   }
 }
 } // namespace
 
-bool parseMidiFile(const uint8_t *data, size_t length, std::vector<MidiEvent> &events, std::string &error)
+bool parseMidiFile(const uint8_t *data, size_t length, std::vector<MidiEvent> &events, std::string &error,
+                   std::vector<std::string> *partNames)
 {
   events.clear();
   if (data == nullptr && length > 0)
@@ -312,11 +366,16 @@ bool parseMidiFile(const uint8_t *data, size_t length, std::vector<MidiEvent> &e
   {
     uint16_t division = 0;
     std::vector<RawEvent> raw;
-    if (!readTracks(ByteReader(data, length), division, raw, error))
+    std::vector<std::string> trackNames, names;
+    if (!readTracks(ByteReader(data, length), division, raw, trackNames, error))
     {
       return false;
     }
-    toTimeline(division, raw, events);
+    toTimeline(division, raw, events, trackNames, names);
+    if (partNames != nullptr)
+    {
+      *partNames = std::move(names);
+    }
     return true;
   }
   catch (const std::bad_alloc &)

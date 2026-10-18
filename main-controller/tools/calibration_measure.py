@@ -383,3 +383,92 @@ def clipcheck(args) -> None:
     else:
         print("\nNo clipping: nothing to redo")
 
+
+def check(args) -> None:
+    """A rough check of the velocity table as the controller plays it: each
+    key at a few velocities, with the exact press the controller sends (its
+    landing times, clamp and hold), against the level the table expects from
+    the curve it was built from. The table's curves were measured with presses
+    timed from LANDING_LIMIT, so a clamp that starts before the landing comes
+    sooner when played, and can play louder. A key's levels can all be off by
+    the same amount between sessions (the microphone, the room), so each key's
+    median difference is taken as that, and what's flagged is a velocity
+    differing from it by over --flag-db, or a strike that didn't sound."""
+    from listen import Table  # plays exactly what the controller would
+
+    table = Table(args.table)
+    table.pedal = args.pedal
+    keys = [k for k in parse_keys(args.keys) if k in table.entries and (not args.pedal or "pedal" in table.entries[k])]
+    if not keys:
+        sys.exit("none of those keys are in the table" + (" with a pedal entry" if args.pedal else ""))
+    strikes = len(keys) * len(args.velocities) * args.strikes
+    print(f"{strikes} strikes on {len(keys)} keys{' with the pedal down' if args.pedal else ''}; "
+          f"roughly {strikes * (4.5 if args.pedal else 3) / 60:.0f} minutes")
+
+    piano = connect(args)
+    recorder = Recorder(args.device, args.sample_rate)
+    timed = TimedRecorder(args.device, args.sample_rate)
+    sos = a_weighting(args.sample_rate)
+    room_db = measure_room(recorder, sos)
+    results = []
+    try:
+        for key in keys:
+            entry = table.entry(key)
+            curve_duties, curve_db = zip(*entry["curve"])
+            print(f"\n== key {key} ({note_name(key)}) ==")
+            for velocity in args.velocities:
+                duty = table.duty(key, velocity)
+                press = table.command(key, velocity)
+                expected = float(np.interp(duty, curve_duties, curve_db))
+                levels, lands, misses = [], [], 0
+                while len(levels) + misses < args.strikes:
+                    wait_until_quiet(recorder, sos, room_db, QUIET_DB, MAX_QUIET_WAIT_S)
+                    if args.pedal:
+                        set_pedal(piano, True)
+                    try:
+                        recorded = record_press(timed, piano, press, f"R:{key}:0", args.hold_ms)
+                    finally:
+                        if args.pedal:
+                            set_pedal(piano, False)
+                    if recorded is None:
+                        continue
+                    measured = analyse_strike(recorded[0], args.sample_rate, sos, args.margin_db, key, args.pedal)
+                    if measured.result == "hit":
+                        levels.append(measured.peak_db - args.gain_db)
+                        if measured.lands_ms is not None:
+                            lands.append(measured.lands_ms)
+                    else:
+                        misses += 1
+                level = statistics.median(levels) if levels else None
+                landing = (entry.get("landing_ms") or table.shared_landing or [None] * 127)[velocity - 1]
+                results.append({"key": key, "velocity": velocity, "duty": duty, "expected_db": round(expected, 2),
+                                "level_db": None if level is None else round(level, 2), "misses": misses,
+                                "lands_ms": statistics.median(lands) if lands else None, "table_lands_ms": landing,
+                                "command": press})
+                got = "  DIDN'T SOUND" if level is None else f"{level:6.1f} dB ({level - expected:+5.1f})"
+                heard = f"lands {statistics.median(lands):4.0f} ms (table {landing})" if lands else ""
+                print(f"  v{velocity:<3d} {format_duty(duty):>6s}%  expected {expected:6.1f} dB, got {got}"
+                      f"{f', {misses} missed' if misses and level is not None else ''}  {heard}  {press}")
+    finally:
+        piano.release_everything()
+        args.out.parent.mkdir(parents=True, exist_ok=True)
+        args.out.write_text(json.dumps(results, indent=1))
+
+    print("\nEach key's median difference (the session's level, taken as no change), then velocities that "
+          f"differ from it by over {args.flag_db} dB:")
+    flagged = []
+    for key in keys:
+        rows = [r for r in results if r["key"] == key]
+        diffs = [r["level_db"] - r["expected_db"] for r in rows if r["level_db"] is not None]
+        if not diffs:
+            continue
+        offset = statistics.median(diffs)
+        notes = [f"v{r['velocity']} {r['level_db'] - r['expected_db'] - offset:+.1f}" for r in rows
+                 if r["level_db"] is not None and abs(r["level_db"] - r["expected_db"] - offset) > args.flag_db]
+        notes += [f"v{r['velocity']} missed {r['misses']}/{args.strikes}" for r in rows if r["misses"]]
+        if notes:
+            flagged.append(key)
+        print(f"  key {key:2d}: {offset:+5.1f} dB{'   ' + ', '.join(notes) if notes else ''}")
+    print(f"\n{len(flagged)} of {len(keys)} keys flagged{': ' + ', '.join(map(str, flagged)) if flagged else ''}. "
+          f"Saved to {args.out}")
+

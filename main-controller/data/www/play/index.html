@@ -9,6 +9,19 @@
   #progress { width: min(32rem, 100%); vertical-align: middle; }
   .notes { width: min(calc(100vw - 48px), 72rem); }
   .notes[hidden] { display: none; }
+  .dynamics { margin: 12px 0; }
+  .dyn { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 4px 0; }
+  .dyn label { width: 5.5em; }
+  .dyn input, .part input { width: 12rem; flex: none; }
+  .dyn output, .part output { width: 3.5em; font-variant-numeric: tabular-nums; }
+  .hint { color: #5f5e5a; font-size: 13px; }
+  .parts[hidden] { display: none; }
+  .parts-title { margin: 10px 0 4px; }
+  .part { display: flex; align-items: center; gap: 8px; margin: 4px 0; font-size: 14px; }
+  .part .swatch { border: 2px solid; width: 14px; height: 10px; }
+  .part-name { flex: 1; min-width: 0; }
+  .part input { width: 10rem; }
+  .velocity-low { font-size: 13px; color: #8a4b00; margin: 2px 0; }
   .swatch.ramp { width: 48px; background: linear-gradient(to right, #dce9fb, #93bdf2, #3d86dc, #1b4f9c, #0b2552); }
   .notes canvas { display: block; width: 100%; cursor: pointer; touch-action: pan-y; }
   .notes .tools { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 6px 0; }
@@ -59,18 +72,38 @@
   </div>
   <p class="change-text" id="change-text"></p>
 </section>
-<p>
-  <label for="volume">Volume</label>
-  <input id="volume" type="range" min="10" max="200" step="5" value="100">
-  <output id="volume-value" for="volume">100%</output>
-  <span id="volume-note"></span>
-</p>
+<section class="dynamics">
+  <div class="dyn">
+    <label for="volume">Volume</label>
+    <input id="volume" type="range" min="10" max="200" step="5" value="100">
+    <output id="volume-value" for="volume">100%</output>
+    <span class="hint">every note</span>
+  </div>
+  <div class="dyn">
+    <label for="contrast">Contrast</label>
+    <input id="contrast" type="range" min="50" max="250" step="5" value="100">
+    <output id="contrast-value" for="contrast">100%</output>
+    <span class="hint">soft passages softer, loud ones louder</span>
+  </div>
+  <div class="dyn">
+    <label for="voicing">Voicing</label>
+    <input id="voicing" type="range" min="50" max="300" step="10" value="100">
+    <output id="voicing-value" for="voicing">100%</output>
+    <span class="hint">within each chord, louder notes louder</span>
+  </div>
+  <div class="parts" id="parts" hidden>
+    <div class="parts-title">Tracks <span class="hint">velocities added to each track's notes, for this piece</span></div>
+    <div id="parts-list"></div>
+  </div>
+  <p><button id="dynamics-reset">Reset</button> <span id="volume-note"></span></p>
+</section>
 <section class="velocities" id="velocities" hidden>
   <div class="legend">
-    <span><i class="swatch played"></i>at this volume</span>
+    <span><i class="swatch played"></i>with these settings</span>
     <span><i class="swatch written"></i>as written</span>
   </div>
   <div class="chart" id="velocity-chart"></div>
+  <p class="velocity-low" id="velocity-low"></p>
 </section>
 <p id="message"></p>
 <script src="/play/notes.js"></script>

@@ -90,7 +90,7 @@ from calibration_common import (  # noqa: E402  (shared setup, audio and connect
     devices,
 )
 from calibration_data import bounce_clamps  # noqa: E402
-from calibration_measure import clipcheck, level, measure  # noqa: E402
+from calibration_measure import check, clipcheck, level, measure  # noqa: E402
 from calibration_review import review  # noqa: E402
 
 # === SETTINGS ===============================================================
@@ -329,6 +329,12 @@ RECORDING_DIR = PROJECT_DIR / "calibration" / "recordings"
 # damped or bouncing, with comments, and strikes overridden as a note or a
 # thump. table and report apply them.
 FLAGS_FILE = PROJECT_DIR / "calibration" / "flags.json"
+# check: a rough look at the table as the controller plays it.
+CHECK_VELOCITIES = [1, 16, 32, 48, 64, 80, 96, 108, 118, 127]  # closer together at the loud end
+CHECK_STRIKES = 2  # per velocity
+CHECK_FLAG_DB = 3  # flag a velocity this far from the key's typical difference
+CHECK_FILE = PROJECT_DIR / "calibration" / "check.json"
+CHECK_PEDAL_FILE = PROJECT_DIR / "calibration" / "check_pedal.json"
 # The same three with the pedal down (measure --pedal, review --pedal).
 PEDAL_RAW_FILE = PROJECT_DIR / "calibration" / "raw_pedal.csv"
 PEDAL_RECORDING_DIR = PROJECT_DIR / "calibration" / "recordings_pedal"
@@ -396,6 +402,20 @@ def main() -> None:
     p.add_argument("--keys", default=KEYS, help="e.g. 51-70")
     p.add_argument("--raw", type=Path, default=RAW_FILE)
     p.set_defaults(run=clipcheck)
+
+    p = commands.add_parser(
+        "check", help="play the table as the controller does at a few velocities, against the levels it expects"
+    )
+    add_audio(p)
+    p.add_argument("--keys", default=KEYS, help="e.g. 0-87, or 30-40,50")
+    p.add_argument("--velocities", type=lambda v: [int(x) for x in v.split(",")], default=CHECK_VELOCITIES,
+                   help="e.g. 1,32,64,127")
+    p.add_argument("--strikes", type=int, default=CHECK_STRIKES, help="per velocity")
+    p.add_argument("--flag-db", type=float, default=CHECK_FLAG_DB, help="see CHECK_FLAG_DB")
+    p.add_argument("--table", type=Path, default=TABLE_FILE)
+    p.add_argument("--out", type=Path, default=None, help="results file (default CHECK_FILE, or CHECK_PEDAL_FILE)")
+    add_pedal(p, "with the sustain pedal down, playing the pedal entries")
+    p.set_defaults(run=check)
 
     p = commands.add_parser("measure", help="sweep duty levels and record loudness")
     add_audio(p)
@@ -562,6 +582,8 @@ def main() -> None:
     )
     if not 0 <= getattr(args, "smoothing", 0) <= 1:
         sys.exit("SMOOTHING must be between 0 and 1")
+    if getattr(args, "out", "unset") is None:  # check
+        args.out = CHECK_PEDAL_FILE if getattr(args, "pedal", False) else CHECK_FILE
     if getattr(args, "pedal", False):
         # The pedal-down files, unless others were given.
         for name, usual, pedal in (

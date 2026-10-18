@@ -67,8 +67,8 @@ static bool readPieceTime(AsyncWebServerRequest *request, PianoController &piano
 class ReportWriter
 {
 public:
-  ReportWriter(std::shared_ptr<const RollReport> report, uint32_t leadMs, uint16_t volume)
-      : report(std::move(report)), leadMs(leadMs), volume(volume)
+  ReportWriter(std::shared_ptr<const RollReport> report, uint32_t leadMs, const Dynamics &dynamics)
+      : report(std::move(report)), leadMs(leadMs), dynamics(dynamics)
   {
   }
 
@@ -96,7 +96,8 @@ private:
     switch (stage)
     {
     case 0:
-      snprintf(text, sizeof(text), "{\"leadMs\":%u,\"volume\":%u,\"notes\":[", leadMs, volume);
+      snprintf(text, sizeof(text), "{\"leadMs\":%u,\"volume\":%u,\"contrast\":%u,\"voicing\":%u,\"notes\":[", leadMs,
+               dynamics.volume, dynamics.contrast, dynamics.voicing);
       stage++;
       break;
     case 1:
@@ -109,9 +110,9 @@ private:
       }
       {
         const NoteReport &note = report->notes[index];
-        snprintf(text, sizeof(text), "%s[%u,%u,%u,%u,%u,%u,%u,%u,%u]", index ? "," : "", note.key, note.onMs,
+        snprintf(text, sizeof(text), "%s[%u,%u,%u,%u,%u,%u,%u,%u,%u,%u]", index ? "," : "", note.key, note.onMs,
                  note.writtenOffMs, note.playedOnMs, note.playedOffMs, note.writtenVelocity, note.playedVelocity,
-                 note.changes, note.mergedIntoMs);
+                 note.changes, note.mergedIntoMs, note.part);
         index++;
       }
       break;
@@ -139,12 +140,95 @@ private:
 
   std::shared_ptr<const RollReport> report;
   uint32_t leadMs;
-  uint16_t volume;
+  Dynamics dynamics;
   int stage = 0;
   size_t index = 0;
   std::string pending;
   size_t sent = 0;
 };
+
+static void sendDynamics(AsyncWebServerRequest *request, PianoController &piano)
+{
+  Dynamics dynamics = piano.dynamics();
+  std::shared_ptr<const PianoRoll> roll = piano.status().roll;
+  JsonDocument doc;
+  doc["volume"] = dynamics.volume;
+  doc["contrast"] = dynamics.contrast;
+  doc["voicing"] = dynamics.voicing;
+  JsonArray parts = doc["parts"].to<JsonArray>();
+  for (size_t i = 0; roll != nullptr && i < roll->partNames.size(); i++)
+  {
+    parts.add(dynamics.partOffset[i]);
+  }
+  sendJson(request, 200, doc);
+}
+
+// A whole number within [low, high], if given.
+static bool readSetting(JsonVariant value, const char *name, long low, long high, long &out, std::string &error)
+{
+  if (!value.is<long>() || value.as<long>() < low || value.as<long>() > high)
+  {
+    error = std::string(name) + " must be a whole number from " + std::to_string(low) + " to " + std::to_string(high);
+    return false;
+  }
+  out = value.as<long>();
+  return true;
+}
+
+// Checks everything given before setting any of it.
+static bool applyDynamics(JsonVariant json, PianoController &piano, std::string &error)
+{
+  long volume = -1, contrast = -1, voicing = -1;
+  if (!json["volume"].isNull() && !readSetting(json["volume"], "volume", MIN_VOLUME, MAX_VOLUME, volume, error))
+  {
+    return false;
+  }
+  if (!json["contrast"].isNull() &&
+      !readSetting(json["contrast"], "contrast", MIN_CONTRAST, MAX_CONTRAST, contrast, error))
+  {
+    return false;
+  }
+  if (!json["voicing"].isNull() && !readSetting(json["voicing"], "voicing", MIN_VOICING, MAX_VOICING, voicing, error))
+  {
+    return false;
+  }
+  std::vector<long> offsets;
+  JsonVariant parts = json["parts"];
+  if (!parts.isNull())
+  {
+    if (!parts.is<JsonArray>() || parts.size() > MAX_MIDI_PARTS)
+    {
+      error = "parts must be a list of up to " + std::to_string(MAX_MIDI_PARTS) + " offsets";
+      return false;
+    }
+    for (JsonVariant part : parts.as<JsonArray>())
+    {
+      long offset;
+      if (!readSetting(part, "each part's offset", -MAX_PART_OFFSET, MAX_PART_OFFSET, offset, error))
+      {
+        return false;
+      }
+      offsets.push_back(offset);
+    }
+  }
+  if (volume >= 0)
+  {
+    piano.setVolume((uint16_t)volume);
+  }
+  if (contrast >= 0)
+  {
+    piano.setContrast((uint16_t)contrast);
+  }
+  if (voicing >= 0)
+  {
+    piano.setVoicing((uint16_t)voicing);
+  }
+  for (size_t i = 0; i < offsets.size(); i++)
+  {
+    piano.setPartOffset((uint8_t)i, (int8_t)offsets[i]);
+  }
+  return true;
+}
 
 static void handleMidiUpload(AsyncWebServerRequest *request, PianoController &piano)
 {
@@ -171,14 +255,19 @@ static void handleMidiUpload(AsyncWebServerRequest *request, PianoController &pi
   }
 
   std::vector<MidiEvent> events;
+  std::vector<std::string> partNames;
   std::string error;
-  if (!parseMidiFile(static_cast<const uint8_t *>(request->_tempObject), length, events, error))
+  if (!parseMidiFile(static_cast<const uint8_t *>(request->_tempObject), length, events, error, &partNames))
   {
     sendError(request, 400, error.c_str());
     return;
   }
   std::shared_ptr<PianoRoll> roll = std::make_shared<PianoRoll>();
-  if (!buildPianoRoll(events, *roll, piano.velocities(), piano.volume()))
+  roll->partNames = std::move(partNames);
+  // A new piece starts with its parts as written (loadRoll resets their offsets).
+  Dynamics dynamics = piano.dynamics();
+  std::fill(dynamics.partOffset, dynamics.partOffset + MAX_MIDI_PARTS, 0);
+  if (!buildPianoRoll(events, *roll, piano.velocities(), dynamics))
   {
     sendError(request, 500, "out of memory");
     return;
@@ -267,7 +356,7 @@ void registerPlaybackRoutes(AsyncWebServer &server, PianoController &piano)
   // show what the roll builder changed: {"leadMs", "volume", "notes": [[key
   // 0-87, on ms, written off ms, played on ms, played off ms (both 0 if
   // merged), written velocity, played velocity (0 if merged), NoteChange
-  // flags, merged: on ms of the strike it's held in], ...], "writtenPedal":
+  // flags, merged: on ms of the strike it's held in, part], ...], "writtenPedal":
   // [[down ms, up ms], ...], "playedPedal": [...]}. Times are on the MIDI's timeline; the playback
   // position is lead ms later. Registered before /api/piece, which would
   // also match it.
@@ -281,15 +370,15 @@ void registerPlaybackRoutes(AsyncWebServer &server, PianoController &piano)
     }
     PianoRoll roll;
     std::shared_ptr<RollReport> report = std::make_shared<RollReport>();
-    // While playing, the volume it's playing at; a new one applies from the
+    // While playing, the dynamics it's playing with; new ones apply from the
     // next Play (or going on from a pause).
-    uint16_t volume = playback.state == PlaybackState::Playing ? loaded->volume : piano.volume();
-    if (!buildPianoRoll(*loaded->source, roll, piano.velocities(), volume, report.get()))
+    Dynamics dynamics = playback.state == PlaybackState::Playing ? loaded->dynamics : piano.dynamics();
+    if (!buildPianoRoll(*loaded->source, roll, piano.velocities(), dynamics, report.get()))
     {
       sendError(request, 500, "out of memory");
       return;
     }
-    std::shared_ptr<ReportWriter> writer = std::make_shared<ReportWriter>(report, roll.leadMs, volume);
+    std::shared_ptr<ReportWriter> writer = std::make_shared<ReportWriter>(report, roll.leadMs, dynamics);
     AsyncWebServerResponse *response = request->beginChunkedResponse(
         "application/json", [writer](uint8_t *buffer, size_t maxLen, size_t) { return writer->write(buffer, maxLen); });
     response->addHeader("Cache-Control", "no-store");
@@ -298,7 +387,8 @@ void registerPlaybackRoutes(AsyncWebServer &server, PianoController &piano)
 
   // GET /api/piece -> the loaded piece's notes by velocity as written, so the
   // play page can show what a volume does to them: {"title", "notes",
-  // "velocities": [count at 1, count at 2, ... count at 127]}, or 404.
+  // "velocities": [count at 1, count at 2, ... count at 127], "parts": [{"name",
+  // "notes", "low", "high", "velocity"}, ...]}, or 404.
   server.on("/api/piece", HTTP_GET, [&piano](AsyncWebServerRequest *request) {
     std::shared_ptr<const PianoRoll> roll = piano.status().roll;
     if (roll == nullptr || roll->source == nullptr)
@@ -307,6 +397,13 @@ void registerPlaybackRoutes(AsyncWebServer &server, PianoController &piano)
       return;
     }
     uint32_t counts[127] = {};
+    struct Part
+    {
+      uint32_t notes = 0;
+      uint8_t low = 255, high = 0;
+      uint32_t velocities[127] = {};
+    };
+    std::vector<Part> parts(roll->partNames.size());
     for (const MidiEvent &event : *roll->source)
     {
       // Notes on the 88 keys (A0-C8), as the roll builder plays them.
@@ -314,6 +411,14 @@ void registerPlaybackRoutes(AsyncWebServer &server, PianoController &piano)
           event.value <= 127)
       {
         counts[event.value - 1]++;
+        if (event.part < parts.size())
+        {
+          Part &part = parts[event.part];
+          part.notes++;
+          part.low = std::min(part.low, event.note);
+          part.high = std::max(part.high, event.note);
+          part.velocities[event.value - 1]++;
+        }
       }
     }
     JsonDocument doc;
@@ -323,6 +428,29 @@ void registerPlaybackRoutes(AsyncWebServer &server, PianoController &piano)
     for (uint32_t count : counts)
     {
       velocities.add(count);
+    }
+    // Each part of the file with notes on the keys: its name, how many, its
+    // lowest and highest MIDI note, and its median velocity.
+    JsonArray partList = doc["parts"].to<JsonArray>();
+    for (size_t i = 0; i < parts.size(); i++)
+    {
+      JsonObject part = partList.add<JsonObject>();
+      part["name"] = roll->partNames[i];
+      part["notes"] = parts[i].notes;
+      if (parts[i].notes)
+      {
+        part["low"] = parts[i].low;
+        part["high"] = parts[i].high;
+        uint32_t seen = 0;
+        for (int v = 0; v < 127; v++)
+        {
+          if ((seen += parts[i].velocities[v]) * 2 >= parts[i].notes)
+          {
+            part["velocity"] = v + 1;
+            break;
+          }
+        }
+      }
     }
     sendJson(request, 200, doc);
   });
@@ -350,4 +478,21 @@ void registerPlaybackRoutes(AsyncWebServer &server, PianoController &piano)
       });
   volumeHandler->setMethod(HTTP_POST);
   server.addHandler(volumeHandler);
+
+  // GET /api/dynamics -> {"volume", "contrast", "voicing", "parts": [offset of
+  // each of the loaded piece's parts]}; POST any of them to set them, e.g.
+  // {"contrast": 130} or {"parts": [8, -8]}. They apply from the next Play.
+  server.on("/api/dynamics", HTTP_GET, [&piano](AsyncWebServerRequest *request) { sendDynamics(request, piano); });
+  AsyncCallbackJsonWebHandler *dynamicsHandler = new AsyncCallbackJsonWebHandler(
+      "/api/dynamics", [&piano](AsyncWebServerRequest *request, JsonVariant &json) {
+        std::string error;
+        if (!applyDynamics(json, piano, error))
+        {
+          sendError(request, 400, error.c_str());
+          return;
+        }
+        sendDynamics(request, piano);
+      });
+  dynamicsHandler->setMethod(HTTP_POST);
+  server.addHandler(dynamicsHandler);
 }

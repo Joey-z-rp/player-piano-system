@@ -232,6 +232,49 @@ void test_rejects_file_without_tracks()
   assertError("no tracks");
 }
 
+// --- parts ---
+
+void test_each_track_is_a_part_named_after_it()
+{
+  // The conductor track has no notes; the left hand plays first, so it's part 0.
+  Bytes conductor = TrackBuilder().tempo(0, 500000).build();
+  Bytes right = TrackBuilder().name(0, "Piano RH").noteOn(480, 72, 80).noteOff(960, 72).build();
+  Bytes left = TrackBuilder().noteOn(0, 48, 50).noteOff(960, 48).build();
+  std::vector<std::string> names;
+  Bytes file = midiFile(1, 480, {conductor, right, left});
+  TEST_ASSERT_TRUE(parseMidiFile(file.data(), file.size(), events, error, &names));
+  TEST_ASSERT_EQUAL(2, names.size());
+  TEST_ASSERT_EQUAL_STRING("Track 3", names[0].c_str());
+  TEST_ASSERT_EQUAL_STRING("Piano RH", names[1].c_str());
+  TEST_ASSERT_EQUAL_UINT8(0, events[0].part); // the left hand's note-on
+  TEST_ASSERT_EQUAL(MidiEventType::NoteOn, events[1].type);
+  TEST_ASSERT_EQUAL_UINT8(1, events[1].part);
+}
+
+void test_channels_of_one_track_are_parts()
+{
+  Bytes track = TrackBuilder().name(0, "Piano").noteOn(0, 72, 80, 0).noteOn(0, 48, 50, 1).noteOff(480, 72, 0)
+                    .noteOff(480, 48, 1).build();
+  std::vector<std::string> names;
+  Bytes file = midiFile(0, 480, {track});
+  TEST_ASSERT_TRUE(parseMidiFile(file.data(), file.size(), events, error, &names));
+  TEST_ASSERT_EQUAL(2, names.size());
+  TEST_ASSERT_EQUAL_STRING("Piano ch 1", names[0].c_str());
+  TEST_ASSERT_EQUAL_STRING("Piano ch 2", names[1].c_str());
+}
+
+void test_one_track_is_one_part()
+{
+  std::vector<std::string> names;
+  Bytes file = midiFile(0, 480, {TrackBuilder().noteOn(0, 60, 64).noteOn(0, 64, 64).noteOff(480, 60).noteOff(480, 64).build()});
+  TEST_ASSERT_TRUE(parseMidiFile(file.data(), file.size(), events, error, &names));
+  TEST_ASSERT_EQUAL(1, names.size());
+  for (const MidiEvent &event : events)
+  {
+    TEST_ASSERT_EQUAL_UINT8(0, event.part);
+  }
+}
+
 int main()
 {
   UNITY_BEGIN();
@@ -258,5 +301,8 @@ int main()
   RUN_TEST(test_rejects_zero_division);
   RUN_TEST(test_rejects_unknown_smpte_rate);
   RUN_TEST(test_rejects_file_without_tracks);
+  RUN_TEST(test_each_track_is_a_part_named_after_it);
+  RUN_TEST(test_channels_of_one_track_are_parts);
+  RUN_TEST(test_one_track_is_one_part);
   return UNITY_END();
 }

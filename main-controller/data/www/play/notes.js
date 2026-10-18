@@ -61,6 +61,11 @@ const noteView = (() => {
   let selected = null;   // the note stepped to
   let hovered = null;
   let pickHandler = () => {};
+  let loadedHandler = () => {};
+  // With more than one part (track), each note's outline shows which it's from.
+  const PART_COLORS = ["#7a4fd0", "#1f9a6f", "#d0456f", "#b07d00", "#2f7fbf", "#8a5a2b"];
+  let partCount = 0;
+  const partColor = (part) => PART_COLORS[part % PART_COLORS.length];
   let frame = 0;
 
   const lead = () => (data ? data.leadMs : 0);
@@ -148,8 +153,8 @@ const noteView = (() => {
       const playedX = xOf(note.playedOn + shift, l);
       ctx.fillStyle = (changed ? RAMPS.changed : RAMPS.played)[note.playedVelocity];
       ctx.fillRect(playedX, y + 1, Math.max(xOf(note.playedOff + shift, l) - playedX, 2), l.rowHeight - 2);
-      ctx.strokeStyle = COLORS.written;
-      ctx.lineWidth = 1;
+      ctx.strokeStyle = partCount > 1 ? partColor(note.part) : COLORS.written;
+      ctx.lineWidth = partCount > 1 ? 1.5 : 1;
       ctx.strokeRect(x + 0.5, y + 0.5, Math.max(xOf(note.writtenOff + shift, l) - x - 1, 1), l.rowHeight - 1);
     }
     if (selected) {
@@ -395,7 +400,7 @@ const noteView = (() => {
   window.addEventListener("resize", redraw);
 
   return {
-    // Loads the loaded piece's notes at the current volume; hides the view without one.
+    // Loads the loaded piece's notes with the current dynamics; hides the view without one.
     async load() {
       try {
         const response = await fetch("/api/piece/notes");
@@ -404,9 +409,14 @@ const noteView = (() => {
         data = null;
       }
       section.hidden = !data;
-      if (!data) return;
+      if (!data) {
+        loadedHandler(null);
+        return;
+      }
       notes = data.notes.map(([key, on, writtenOff, playedOn, playedOff, writtenVelocity, playedVelocity, changes,
-        mergedInto]) => ({ key, on, writtenOff, playedOn, playedOff, writtenVelocity, playedVelocity, changes, mergedInto }));
+        mergedInto, part]) => ({ key, on, writtenOff, playedOn, playedOff, writtenVelocity, playedVelocity, changes,
+        mergedInto, part: part || 0 }));
+      loadedHandler(notes);
       const keys = notes.map((n) => n.key);
       lowKey = Math.max(0, Math.min(...keys) - 1);
       highKey = Math.min(87, Math.max(...keys) + 1);
@@ -438,6 +448,16 @@ const noteView = (() => {
     // Called with a time on the playback timeline when the view is clicked.
     onPick(handler) {
       pickHandler = handler;
-    }
+    },
+    // Called with every note (as load gives them) each time they're loaded, or null.
+    onLoaded(handler) {
+      loadedHandler = handler;
+    },
+    // How many parts the piece has: with more than one, notes show which they're from.
+    setPartCount(count) {
+      partCount = count;
+      redraw();
+    },
+    partColor,
   };
 })();

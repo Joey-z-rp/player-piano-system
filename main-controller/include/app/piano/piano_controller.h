@@ -38,6 +38,14 @@ static const uint32_t PEDAL_SETTLE_MS = 100;
 static const uint16_t MIN_VOLUME = 10;
 static const uint16_t MAX_VOLUME = 200;
 static const uint16_t DEFAULT_VOLUME = 100;
+// Contrast and voicing stretch velocities apart (see Dynamics), in percent,
+// within these limits; saved like the volume. Each part's offset (in
+// velocities) is for the loaded piece only, and starts at 0 for each new one.
+static const uint16_t MIN_CONTRAST = 50;
+static const uint16_t MAX_CONTRAST = 250;
+static const uint16_t MIN_VOICING = 50;
+static const uint16_t MAX_VOICING = 300;
+static const int8_t MAX_PART_OFFSET = 20;
 
 // Before each song, and on request, the driver boards are restarted and given
 // this long to come back, so a driver stuck in a bad state can't carry it
@@ -90,7 +98,7 @@ public:
   PlaybackResult loadRoll(std::shared_ptr<const PianoRoll> roll);
   // Plays the loaded piece from fromMs on its timeline (see findRollStart).
   // CONTINUE plays from the start, or where it was paused. Going on from a
-  // pause rebuilds the piece if the volume has changed.
+  // pause rebuilds the piece if the dynamics have changed.
   static const uint32_t CONTINUE = UINT32_MAX;
   PlaybackResult play(uint32_t fromMs = CONTINUE);
   PlaybackResult pause();
@@ -106,6 +114,13 @@ public:
   // Saved, so it survives a restart. Returns false if out of range.
   bool setVolume(uint16_t percent);
   uint16_t volume() const;
+  // Saved too. Return false if out of range.
+  bool setContrast(uint16_t percent);
+  bool setVoicing(uint16_t percent);
+  // For the loaded piece (see MidiEvent::part). Returns false if out of range.
+  bool setPartOffset(uint8_t part, int8_t velocities);
+  // Everything a piece is shaped by, as it is now: applies from the next Play.
+  Dynamics dynamics() const;
   // For building rolls timed to how this piano's hammers land.
   const VelocityTable *velocities() const;
 
@@ -138,7 +153,7 @@ private:
   void startPlayback(uint32_t fromMs);
   void resumePlayback(uint32_t fromMs);
   void playFrom(uint32_t fromMs);
-  void rebuildForVolume();
+  void rebuildForDynamics();
   void playDueEvents();
   void finishPlayback();
   void sendRollEvent(const RollEvent &event);
@@ -156,6 +171,9 @@ private:
   std::shared_ptr<const PianoRoll> loadedRoll;
   std::atomic<PlaybackState> state;
   std::atomic<uint16_t> volumePercent;
+  std::atomic<uint16_t> contrastPercent;
+  std::atomic<uint16_t> voicingPercent;
+  std::atomic<int8_t> partOffsets[MAX_MIDI_PARTS];
   std::atomic<uint32_t> playStartMs;
   std::atomic<uint32_t> pausedAtMs;
 

@@ -12,6 +12,9 @@ void registerStatusRoutes(AsyncWebServer &server, PianoController &piano)
     doc["rssi"] = WiFi.RSSI();
     doc["pendingCommands"] = piano.pendingCommands();
     doc["volume"] = piano.volume();
+    Dynamics dynamics = piano.dynamics();
+    doc["contrast"] = dynamics.contrast;
+    doc["voicing"] = dynamics.voicing;
 
     PlaybackStatus playback = piano.status();
     JsonObject playbackJson = doc["playback"].to<JsonObject>();

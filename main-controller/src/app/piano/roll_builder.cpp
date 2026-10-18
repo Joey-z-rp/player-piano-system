@@ -1,6 +1,7 @@
 #include "app/piano/roll_builder.h"
 #include "app/piano/velocity_table.h"
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <new>
 
@@ -33,6 +34,7 @@ namespace
     uint8_t changes;       // NoteChange flags
     uint32_t mergedIntoMs; // merged notes: when the strike they're held in is written
     bool pedal;            // the sustain pedal is down when it's written to sound
+    uint8_t part;          // see MidiEvent::part
   };
 
   // A note-on at the same moment as another on its key, played as that one.
@@ -72,7 +74,8 @@ namespace
         if (soundingNote[key] != NO_NOTE && notes[soundingNote[key]].writtenOnMs == event.timeMs)
         {
           Note &first = notes[soundingNote[key]];
-          Note copy = {event.timeMs, UINT32_MAX, key, 0, 0, event.timeMs, 0, event.value, 0, event.timeMs, false};
+          Note copy = {event.timeMs, UINT32_MAX, key, 0, 0, event.timeMs, 0, event.value, 0, event.timeMs, false,
+                       event.part};
           if (event.value == first.writtenVelocity)
           {
             copy.changes = NOTE_DUPLICATE;
@@ -99,7 +102,8 @@ namespace
         {
           notes[soundingNote[key]].offMs = event.timeMs;
         }
-        notes.push_back({event.timeMs, UINT32_MAX, key, event.value, 0, event.timeMs, 0, event.value, 0, 0, false});
+        notes.push_back(
+            {event.timeMs, UINT32_MAX, key, event.value, 0, event.timeMs, 0, event.value, 0, 0, false, event.part});
         soundingNote[key] = notes.size() - 1;
         if (heldCount[key] < 255)
         {
@@ -196,18 +200,73 @@ namespace
     }
   }
 
-  // The volume: every velocity times volume percent, kept within 1-127, so the
-  // piece's dynamics stay in proportion. Before landing times and repeats are
-  // worked out, which depend on velocity.
-  void scaleVelocities(std::vector<Note> &notes, uint16_t volume)
+  // Shapes the velocities, in this order (each on the result of the last):
+  //  1. each part's offset is added, to bring out a hand or a voice;
+  //  2. voicing: the notes of each chord (starting within CHORD_WINDOW_MS of
+  //     its first) are stretched away from the chord's average by voicing
+  //     percent, so whatever voicing the file has stands out more (or less);
+  //  3. contrast: every note is stretched away from the piece's median by
+  //     contrast percent, so soft passages get softer and loud ones louder;
+  //  4. volume: every velocity times volume percent.
+  // Rounded once at the end, and kept within 1-127. With volume alone it's
+  // exactly velocity * volume / 100, rounded. Before landing times and
+  // repeats are worked out, which depend on velocity. The play page
+  // (data/www/play/app.js shapeVelocities) does the same, to preview it.
+  void shapeVelocities(std::vector<Note> &notes, const Dynamics &dynamics)
   {
-    for (Note &note : notes)
+    if (dynamics == Dynamics())
     {
-      uint32_t scaled = ((uint32_t)note.velocity * volume + 50) / 100;
-      note.velocity = (uint8_t)std::min<uint32_t>(std::max<uint32_t>(scaled, 1), 127);
-      if (note.velocity != scaled)
+      return;
+    }
+    std::vector<double> shaped(notes.size());
+    for (size_t i = 0; i < notes.size(); i++)
+    {
+      shaped[i] = notes[i].velocity + dynamics.partOffset[std::min<uint8_t>(notes[i].part, MAX_MIDI_PARTS - 1)];
+    }
+    if (dynamics.voicing != 100)
+    {
+      // Notes are in the order they're written.
+      for (size_t first = 0; first < notes.size();)
       {
-        note.changes |= NOTE_VELOCITY_LIMITED;
+        size_t end = first + 1;
+        while (end < notes.size() && notes[end].writtenOnMs - notes[first].writtenOnMs < CHORD_WINDOW_MS)
+        {
+          end++;
+        }
+        if (end - first > 1)
+        {
+          double average = 0;
+          for (size_t i = first; i < end; i++)
+          {
+            average += shaped[i];
+          }
+          average /= end - first;
+          for (size_t i = first; i < end; i++)
+          {
+            shaped[i] = average + (shaped[i] - average) * dynamics.voicing / 100.0;
+          }
+        }
+        first = end;
+      }
+    }
+    if (dynamics.contrast != 100 && !shaped.empty())
+    {
+      std::vector<double> sorted = shaped;
+      std::sort(sorted.begin(), sorted.end());
+      size_t middle = sorted.size() / 2;
+      double median = sorted.size() % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
+      for (double &velocity : shaped)
+      {
+        velocity = median + (velocity - median) * dynamics.contrast / 100.0;
+      }
+    }
+    for (size_t i = 0; i < notes.size(); i++)
+    {
+      double rounded = std::floor((shaped[i] * dynamics.volume + 50) / 100);
+      notes[i].velocity = (uint8_t)std::min(std::max(rounded, 1.0), 127.0);
+      if (notes[i].velocity != rounded)
+      {
+        notes[i].changes |= NOTE_VELOCITY_LIMITED;
       }
     }
   }
@@ -335,7 +394,7 @@ namespace
     for (const Note &note : notes)
     {
       NoteReport out = {note.writtenOnMs, note.writtenOffMs, 0, 0, note.mergedIntoMs, note.key, note.writtenVelocity,
-                        note.velocity, note.changes};
+                        note.velocity, note.part, note.changes};
       if (note.velocity != 0)
       {
         out.playedOnMs = note.onMs + note.landingMs - lead;
@@ -355,7 +414,7 @@ namespace
     {
       const Note &note = copy.note;
       report.notes.push_back({note.writtenOnMs, note.writtenOffMs, 0, 0, note.mergedIntoMs, note.key,
-                              note.writtenVelocity, 0, note.changes});
+                              note.writtenVelocity, 0, note.part, note.changes});
     }
     std::stable_sort(report.notes.begin(), report.notes.end(),
                      [](const NoteReport &a, const NoteReport &b)
@@ -382,6 +441,14 @@ namespace
 bool buildPianoRoll(const std::vector<MidiEvent> &events, PianoRoll &roll, const VelocityTable *timing,
                     uint16_t volume, RollReport *report)
 {
+  Dynamics dynamics;
+  dynamics.volume = volume;
+  return buildPianoRoll(events, roll, timing, dynamics, report);
+}
+
+bool buildPianoRoll(const std::vector<MidiEvent> &events, PianoRoll &roll, const VelocityTable *timing,
+                    const Dynamics &dynamics, RollReport *report)
+{
   if (report != nullptr)
   {
     *report = RollReport();
@@ -392,7 +459,7 @@ bool buildPianoRoll(const std::vector<MidiEvent> &events, PianoRoll &roll, const
   roll.skippedNotes = 0;
   roll.mergedNotes = 0;
   roll.duplicateNotes = 0;
-  roll.volume = volume;
+  roll.dynamics = dynamics;
   roll.leadMs = 0;
 
   try
@@ -407,10 +474,7 @@ bool buildPianoRoll(const std::vector<MidiEvent> &events, PianoRoll &roll, const
       pedalSpans(pedal, 0, endMs, report->writtenPedal);
     }
     std::vector<RollEvent> played = spacePedal(pedal);
-    if (volume != 100)
-    {
-      scaleVelocities(notes, volume);
-    }
+    shapeVelocities(notes, dynamics);
     if (timing != nullptr && timing->hasLanding())
     {
       markPedal(notes, played, *timing);

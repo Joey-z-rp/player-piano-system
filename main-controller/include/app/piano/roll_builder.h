@@ -7,17 +7,6 @@
 
 class VelocityTable;
 
-// Arranges a MIDI timeline for this piano: notes map onto the 88 keys
-// (others are counted as skipped), and the timing is adjusted for the
-// solenoids. Repeated notes on a key are separated so it's released before
-// it strikes again, with repeats too fast for that held as one note (see
-// separateRepeats). Sustain pedal changes are spaced so the pedal solenoids
-// can keep up (see spacePedal). With a velocity table that has landing times,
-// each press is sent early by its hammer's landing time, so soft and loud
-// notes sound when the MIDI says (see allowForLanding). Every velocity is
-// scaled by volume percent first (clamped to 1-127). With a report, it also
-// says what became of every note and the pedal. Returns false if it runs out
-// of memory.
 // What became of each written note, for showing what the builder changed.
 enum NoteChange : uint8_t
 {
@@ -25,7 +14,7 @@ enum NoteChange : uint8_t
   NOTE_ABSORBED = 2,         // a strike that repeats were merged into: held longer, or louder (and re-timed), for them
   NOTE_SHORTENED = 4,        // released early, so the key can reset before its next strike
   NOTE_LENGTHENED = 8,       // held on until its hammer has landed
-  NOTE_VELOCITY_LIMITED = 16, // the volume took it past 1-127
+  NOTE_VELOCITY_LIMITED = 16, // the dynamics took it past 1-127
   NOTE_DUPLICATE = 32         // the same note again at the same moment and velocity: played once
 };
 
@@ -38,7 +27,8 @@ struct NoteReport
   uint32_t mergedIntoMs;  // merged: the onMs of the strike it's held in
   uint8_t key;            // 0-87
   uint8_t writtenVelocity;
-  uint8_t playedVelocity; // after the volume and any merges; 0 if merged
+  uint8_t playedVelocity; // after the dynamics and any merges; 0 if merged
+  uint8_t part;           // see MidiEvent::part
   uint8_t changes;        // NoteChange flags
 };
 
@@ -55,8 +45,25 @@ struct RollReport
   std::vector<PedalSpan> playedPedal; // after spacing, on the MIDI's timeline
 };
 
+// Arranges a MIDI timeline for this piano: notes map onto the 88 keys
+// (others are counted as skipped), and the timing is adjusted for the
+// solenoids. Repeated notes on a key are separated so it's released before
+// it strikes again, with repeats too fast for that held as one note (see
+// separateRepeats). Sustain pedal changes are spaced so the pedal solenoids
+// can keep up (see spacePedal). With a velocity table that has landing times,
+// each press is sent early by its hammer's landing time, so soft and loud
+// notes sound when the MIDI says (see allowForLanding). The velocities are
+// shaped by dynamics first (see shapeVelocities; kept within 1-127). With a
+// report, it also says what became of every note and the pedal. Returns
+// false if it runs out of memory.
+bool buildPianoRoll(const std::vector<MidiEvent> &events, PianoRoll &roll, const VelocityTable *timing,
+                    const Dynamics &dynamics, RollReport *report = nullptr);
+// The same, with only a volume.
 bool buildPianoRoll(const std::vector<MidiEvent> &events, PianoRoll &roll, const VelocityTable *timing = nullptr,
                     uint16_t volume = 100, RollReport *report = nullptr);
+
+// Notes starting within this long of a group's first note are one chord, for voicing.
+static const uint32_t CHORD_WINDOW_MS = 40;
 
 // Where to pick up a roll part way through, so the notes that sound from
 // fromMs on its timeline play. The clock starts the roll's lead earlier, so
