@@ -13,6 +13,9 @@ const contrast = document.getElementById("contrast");
 const contrastValue = document.getElementById("contrast-value");
 const voicing = document.getElementById("voicing");
 const voicingValue = document.getElementById("voicing-value");
+const repeatBoost = document.getElementById("repeat-boost");
+const repeatBoostValue = document.getElementById("repeat-boost-value");
+const repeatNote = document.getElementById("repeat-note");
 const partsSection = document.getElementById("parts");
 const partsList = document.getElementById("parts-list");
 const resetButton = document.getElementById("dynamics-reset");
@@ -41,6 +44,7 @@ function settings() {
     volume: Number(volume.value),
     contrast: Number(contrast.value),
     voicing: Number(voicing.value),
+    repeatBoost: Number(repeatBoost.value),
     parts: partOffsets.slice(),
   };
 }
@@ -340,7 +344,22 @@ function showParts() {
   );
 }
 
+// How many repeats are merged (not struck) and boosted, as the controller
+// will play the piece: from the note view's notes, built with the settings.
+function showRepeats(notes) {
+  if (!notes) {
+    repeatNote.textContent = "";
+    return;
+  }
+  const MERGED = 1, BOOSTED = 64;
+  const merged = notes.filter((n) => (n.changes & MERGED) && n.mergedInto !== n.on).length;
+  const boosted = notes.filter((n) => n.changes & BOOSTED).length;
+  repeatNote.textContent = `${merged} repeated ${merged === 1 ? "note" : "notes"} merged (too soon to strike again)` +
+    (boosted ? `; ${boosted} played louder to strike again` : "");
+}
+
 noteView.onLoaded((notes) => {
+  showRepeats(notes);
   pieceNotes = notes ? shapedNotes(notes) : null;
   velocitySection.hidden = !pieceNotes;
   drawVelocities();
@@ -357,9 +376,11 @@ async function request(url, options) {
     const response = await fetch(url, options);
     const body = await response.json();
     message.textContent = response.ok ? "" : body.error;
+    message.classList.toggle("error", !response.ok);
     return response.ok ? body : null;
   } catch (error) {
     message.textContent = "request failed: " + error.message;
+    message.classList.add("error");
     return null;
   }
 }
@@ -370,6 +391,7 @@ fileInput.addEventListener("change", async () => {
     return;
   }
   message.textContent = "Uploading...";
+  message.classList.remove("error");
   const summary = await request(
     "/api/midi?name=" + encodeURIComponent(file.name),
     {
@@ -378,7 +400,9 @@ fileInput.addEventListener("change", async () => {
       body: file,
     },
   );
-  if (summary) {
+  if (!summary) {
+    message.textContent = `Couldn't load ${file.name}: ${message.textContent}`;
+  } else {
     const notices = [];
     if (summary.skippedNotes > 0) {
       notices.push(
@@ -446,6 +470,7 @@ function showDynamics() {
   volumeValue.textContent = volume.value + "%";
   contrastValue.textContent = contrast.value + "%";
   voicingValue.textContent = voicing.value + "%";
+  repeatBoostValue.textContent = "+" + repeatBoost.value;
 }
 
 let dynamicsTimer;
@@ -468,12 +493,13 @@ function dynamicsChanged() {
   }, 300);
 }
 
-[volume, contrast, voicing].forEach((slider) => slider.addEventListener("input", dynamicsChanged));
+[volume, contrast, voicing, repeatBoost].forEach((slider) => slider.addEventListener("input", dynamicsChanged));
 
 resetButton.addEventListener("click", () => {
   volume.value = 100;
   contrast.value = 100;
   voicing.value = 100;
+  repeatBoost.value = 0;
   partOffsets = partOffsets.map(() => 0);
   showParts();
   dynamicsChanged();
@@ -501,10 +527,10 @@ async function refresh() {
     noteView.load(); // shows the current settings again, if they were changed while playing
   }
   if (!dynamicsChanging && status.volume !== undefined) {
-    const now = [Number(volume.value), Number(contrast.value), Number(voicing.value)];
-    const saved = [status.volume, status.contrast ?? 100, status.voicing ?? 100];
+    const now = [Number(volume.value), Number(contrast.value), Number(voicing.value), Number(repeatBoost.value)];
+    const saved = [status.volume, status.contrast ?? 100, status.voicing ?? 100, status.repeatBoost ?? 0];
     if (now.some((v, i) => v !== saved[i])) {
-      [volume.value, contrast.value, voicing.value] = saved;
+      [volume.value, contrast.value, voicing.value, repeatBoost.value] = saved;
       showDynamics();
       drawVelocities();
     }
@@ -517,7 +543,7 @@ async function refresh() {
     startFrom = 0;
     pieceNotes = null;
     loadPiece();
-    noteView.load();
+    noteView.load(true); // a new piece: its notes from the start
   }
   if (!playing) {
     volumeNote.textContent = "";

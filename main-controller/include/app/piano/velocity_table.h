@@ -6,6 +6,7 @@
 #include <stdint.h>
 #include <string>
 #include "app/piano/piano_roll.h"
+#include "app/piano/play_config.h"
 
 static const uint8_t VELOCITY_LEVELS = 127; // MIDI velocities 1-127
 
@@ -117,7 +118,10 @@ public:
   // strike, then the hold, e.g. "P:30:65:50:20:6:60:40:35". Nothing starts
   // before the strike ends. Without landing times, a plain "P:key:duty".
   // tools/calibration_common.py's drive_command does the same.
-  void pressCommand(uint8_t key, uint8_t velocity, char *out, size_t size, bool pedal = false) const;
+  // repeatClamp: for a repeat, the clamp it gets in place of the key's own
+  // (PlayConfig::repeatClamp; none if its ms is 0).
+  void pressCommand(uint8_t key, uint8_t velocity, char *out, size_t size, bool pedal = false,
+                    const ClampSettings *repeatClamp = nullptr) const;
 
   // Percent with up to two decimals, as the drivers take it: 3225 -> "32.25".
   static void formatDuty(char *text, size_t size, uint16_t duty);

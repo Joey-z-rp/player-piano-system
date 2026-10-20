@@ -514,6 +514,36 @@ void test_latest_landing_includes_the_pedal_entries()
   TEST_ASSERT_EQUAL_UINT16(80, table.maxLandingMs());
 }
 
+void test_repeat_uses_the_repeat_clamp()
+{
+  // The key's own clamp (from 10 ms after landing, 30 ms at 65%) for a single
+  // note; for a repeat, the clamp given for repeats: 20 ms before landing, 100 ms at 100%.
+  std::string json = pressTable(100, "\"clamp_offset_ms\":10,\"clamp_ms\":30,\"clamp_duty\":65");
+  VelocityTable table;
+  std::string error;
+  TEST_ASSERT_TRUE_MESSAGE(load(table, json, error), error.c_str());
+  char command[49];
+  table.pressCommand(40, 64, command, sizeof(command));
+  TEST_ASSERT_EQUAL_STRING("P:40:40:50:20:60:65:30:25", command);
+  ClampSettings repeat = {-20, 100, 10000};
+  table.pressCommand(40, 64, command, sizeof(command), false, &repeat);
+  TEST_ASSERT_EQUAL_STRING("P:40:40:50:20:30:100:100:25", command);
+  repeat = {-10, 60, 8000};
+  table.pressCommand(40, 64, command, sizeof(command), false, &repeat);
+  TEST_ASSERT_EQUAL_STRING("P:40:40:50:20:40:80:60:25", command);
+}
+
+void test_repeat_clamp_of_0_ms_plays_like_any_note()
+{
+  VelocityTable table;
+  std::string error;
+  TEST_ASSERT_TRUE_MESSAGE(load(table, pressTable(100), error), error.c_str());
+  ClampSettings none = {-20, 0, 10000};
+  char command[49];
+  table.pressCommand(40, 64, command, sizeof(command), false, &none);
+  TEST_ASSERT_EQUAL_STRING("P:40:40:50:20:60:25", command);
+}
+
 int main()
 {
   UNITY_BEGIN();
@@ -553,6 +583,8 @@ int main()
   RUN_TEST(test_key_without_a_pedal_entry_plays_the_same_either_way);
   RUN_TEST(test_rejects_a_pedal_entry_without_landing_times);
   RUN_TEST(test_latest_landing_includes_the_pedal_entries);
+  RUN_TEST(test_repeat_uses_the_repeat_clamp);
+  RUN_TEST(test_repeat_clamp_of_0_ms_plays_like_any_note);
   RUN_TEST(test_generated_table_loads);
   return UNITY_END();
 }

@@ -15,6 +15,8 @@
   .dyn input, .part input { width: 12rem; flex: none; }
   .dyn output, .part output { width: 3.5em; font-variant-numeric: tabular-nums; }
   .hint { color: #5f5e5a; font-size: 13px; }
+  #message:empty { display: none; }
+  #message.error { color: #b3261e; font-weight: 600; }
   .parts[hidden] { display: none; }
   .parts-title { margin: 10px 0 4px; }
   .part { display: flex; align-items: center; gap: 8px; margin: 4px 0; font-size: 14px; }
@@ -22,6 +24,7 @@
   .part-name { flex: 1; min-width: 0; }
   .part input { width: 10rem; }
   .velocity-low { font-size: 13px; color: #8a4b00; margin: 2px 0; }
+  .repeat-note { font-size: 13px; color: #5f5e5a; margin: 2px 0 6px 6.5em; min-height: 1.2em; }
   .swatch.ramp { width: 48px; background: linear-gradient(to right, #dce9fb, #93bdf2, #3d86dc, #1b4f9c, #0b2552); }
   .notes canvas { display: block; width: 100%; cursor: pointer; touch-action: pan-y; }
   .notes .tools { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 6px 0; }
@@ -47,6 +50,7 @@
 <body>
 <h1>Play</h1>
 <p><input id="file" type="file" accept=".mid,.midi,audio/midi"></p>
+<p id="message"></p>
 <p id="piece">No piece loaded</p>
 <p>
   <button id="play" disabled>Play</button>
@@ -91,11 +95,19 @@
     <output id="voicing-value" for="voicing">100%</output>
     <span class="hint">within each chord, louder notes louder</span>
   </div>
+  <div class="dyn">
+    <label for="repeat-boost">Repeats</label>
+    <input id="repeat-boost" type="range" min="0" max="40" step="2" value="0">
+    <output id="repeat-boost-value" for="repeat-boost">+0</output>
+    <span class="hint">louder repeats can strike again sooner</span>
+  </div>
+  <p class="repeat-note" id="repeat-note"></p>
   <div class="parts" id="parts" hidden>
     <div class="parts-title">Tracks <span class="hint">velocities added to each track's notes, for this piece</span></div>
     <div id="parts-list"></div>
   </div>
   <p><button id="dynamics-reset">Reset</button> <span id="volume-note"></span></p>
+  <p class="hint">How soon keys can repeat, how long notes are held and the pedal's timing: <a href="/config">Config</a></p>
 </section>
 <section class="velocities" id="velocities" hidden>
   <div class="legend">
@@ -105,7 +117,6 @@
   <div class="chart" id="velocity-chart"></div>
   <p class="velocity-low" id="velocity-low"></p>
 </section>
-<p id="message"></p>
 <script src="/play/notes.js"></script>
 <script src="/play/app.js"></script>
 </body>

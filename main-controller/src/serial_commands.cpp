@@ -57,6 +57,13 @@ void SerialCommands::handleLine()
     Serial.println(piano->stop() == PlaybackResult::Ok ? "#OK" : "#ERR queue full");
     return;
   }
+  if (command == "CONFIG")
+  {
+    // The play config, for the tools: one line, then #OK.
+    Serial.printf("#CONFIG %s\n", playConfigJson(piano->playConfig()).c_str());
+    Serial.println("#OK");
+    return;
+  }
   if (command == "RESET")
   {
     Serial.println(piano->resetDrivers() == PlaybackResult::Ok ? "#OK" : "#ERR queue full");

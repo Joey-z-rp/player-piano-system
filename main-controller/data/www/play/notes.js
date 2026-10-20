@@ -4,13 +4,14 @@
 // the playhead while playing; when stopped it can be dragged, and a click
 // picks a point to play from.
 const noteView = (() => {
-  const MERGED = 1, ABSORBED = 2, SHORTENED = 4, LENGTHENED = 8, LIMITED = 16, DUPLICATE = 32;
+  const MERGED = 1, ABSORBED = 2, SHORTENED = 4, LENGTHENED = 8, LIMITED = 16, DUPLICATE = 32, BOOSTED = 64;
   const KINDS = [
     { flag: MERGED, label: "merged" },
     { flag: SHORTENED, label: "shortened" },
     { flag: LENGTHENED, label: "lengthened" },
     { flag: LIMITED, label: "velocity limited" },
-    { flag: DUPLICATE, label: "duplicates" }
+    { flag: DUPLICATE, label: "duplicates" },
+    { flag: BOOSTED, label: "repeats boosted" }
   ];
   // Velocity 1 to 127, light to dark, for played notes and changed ones.
   const RAMPS = {
@@ -149,7 +150,7 @@ const noteView = (() => {
         ctx.strokeRect(x, y + 0.75, Math.max(xOf(note.writtenOff + shift, l) - x, 2), l.rowHeight - 1.5);
         continue;
       }
-      const changed = note.changes & (SHORTENED | LENGTHENED | ABSORBED | LIMITED);
+      const changed = note.changes & (SHORTENED | LENGTHENED | ABSORBED | LIMITED | BOOSTED);
       const playedX = xOf(note.playedOn + shift, l);
       ctx.fillStyle = (changed ? RAMPS.changed : RAMPS.played)[note.playedVelocity];
       ctx.fillRect(playedX, y + 1, Math.max(xOf(note.playedOff + shift, l) - playedX, 2), l.rowHeight - 2);
@@ -240,6 +241,10 @@ const noteView = (() => {
         lines.push(`Merged: written ${-gap} ms before another note on this key${strike ? ` (velocity ${strike.writtenVelocity})` : ""}, ` +
           "too close for two strikes, so they're struck once, at the louder velocity, when the first should sound.");
       }
+    }
+    if (note.changes & BOOSTED) {
+      lines.push(`Repeat played louder (the Repeats setting), at velocity ${note.playedVelocity}, so the key can ` +
+        "strike again this soon.");
     }
     if (note.changes & DUPLICATE) {
       lines.push("Duplicate: the file has this note twice at once, at the same velocity, so it's played once.");
@@ -400,8 +405,14 @@ const noteView = (() => {
   window.addEventListener("resize", redraw);
 
   return {
-    // Loads the loaded piece's notes with the current dynamics; hides the view without one.
-    async load() {
+    // Loads the loaded piece's notes with the current dynamics; hides the view
+    // without one. fromStart: a new piece, so the view goes back to its start.
+    async load(fromStart = false) {
+      if (fromStart) {
+        marker = 0;
+        viewStart = -span * 0.25;
+        selected = null;
+      }
       try {
         const response = await fetch("/api/piece/notes");
         data = response.ok ? await response.json() : null;
@@ -433,15 +444,17 @@ const noteView = (() => {
     // differences, from how long replies take, are eased out.
     update(isPlaying, positionMs, startFrom, sampledAt) {
       const started = isPlaying && !playing;
+      const stopped = !isPlaying && playing; // finished, stopped or paused
       playing = isPlaying;
       const now = performance.now();
       const reported = positionMs + (now - sampledAt);
       const error = reported - (clockMs + (now - clockAt));
       clockMs = started || Math.abs(error) > 250 ? reported : clockMs + (now - clockAt) + error * 0.15;
       clockAt = now;
-      if (!playing && startFrom !== marker) {
+      if (!playing && (stopped || startFrom !== marker)) {
+        // Back to where Play starts (the start when a piece finishes or is stopped, the pause point when paused).
         marker = startFrom;
-        if (marker < viewStart || marker > viewStart + span) viewStart = marker - span * 0.25;
+        if (stopped || marker < viewStart || marker > viewStart + span) viewStart = marker - span * 0.25;
       }
       if (started || !playing) redraw();
     },

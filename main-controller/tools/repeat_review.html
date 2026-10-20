@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Repeat review</title>
+<style>
+  body { font: 15px/1.45 system-ui, sans-serif; margin: 24px; color: #1d1c1a; background: #fff; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .muted { color: #5f5e5a; font-size: 13px; }
+  .bar { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin: 12px 0; }
+  table { border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  th, td { padding: 3px 4px; text-align: center; font-size: 13px; }
+  th { color: #5f5e5a; font-weight: 600; }
+  td.label { text-align: left; white-space: nowrap; padding-right: 10px; }
+  .try { width: 22px; height: 22px; border-radius: 4px; border: 2px solid transparent; cursor: pointer; font: 600 12px system-ui;
+         color: #fff; margin: 1px; padding: 0; }
+  .try.both { background: #2f8f5b; }
+  .try.missed { background: #c94a3b; }
+  .try.reviewed { border-color: #1d1c1a; }
+  .try.disagree { outline: 3px solid #e3b400; }
+  .try.current { box-shadow: 0 0 0 3px #2a78d6; }
+  .try.noted { position: relative; }
+  .try.noted::after { content: ""; position: absolute; top: -3px; right: -3px; width: 7px; height: 7px;
+                      border-radius: 50%; background: #2a78d6; border: 1px solid #fff; }
+  .comment { margin-top: 6px; display: flex; gap: 6px; align-items: center; }
+  .comment input { flex: 1; max-width: 32rem; font: 14px system-ui; padding: 3px 6px; }
+  .skip { color: #b5b4ae; }
+  .detail { margin: 14px 0; min-height: 3em; }
+  .detail button { font-size: 15px; margin-right: 6px; }
+  .legend span { margin-right: 14px; }
+  .legend i { display: inline-block; width: 12px; height: 12px; border-radius: 3px; vertical-align: -1px; margin-right: 4px; }
+</style>
+</head>
+<body>
+<h1>Repeat review</h1>
+<p class="muted">Click a square to hear that pair, then say whether you hear one note or two. Keys: <b>2</b> two notes,
+  <b>1</b> one note, <b>0</b> clear, <b>space</b> play again, <b>→</b> next, <b>←</b> previous, <b>n</b> next not yet reviewed. Type a comment (e.g. "bounces") and press Enter to save it.</p>
+<div class="bar">
+  <label>Key <select id="key"></select></label>
+  <span id="summary" class="muted"></span>
+</div>
+<p class="legend muted">
+  <span><i style="background:#2f8f5b"></i>detection: both notes</span>
+  <span><i style="background:#c94a3b"></i>detection: second missing</span>
+  <span><i style="border:2px solid #1d1c1a"></i>you've reviewed it (the number is your verdict)</span>
+  <span><i style="outline:3px solid #e3b400"></i>you and the detection disagree</span>
+  <span><i style="background:#2a78d6;border-radius:50%;width:8px;height:8px"></i>has your comment</span>
+</p>
+<div id="grid"></div>
+<div class="detail" id="detail"></div>
+<script>
+let rows = [], flags = {}, order = [], current = -1;
+const audio = new Audio();
+const keySelect = document.getElementById("key");
+const id = (r) => `${r.key}:${r.release}:${r.recording}`;
+const verdictResult = (v) => (v === "two" ? "both" : v === "one" ? "missed" : null);
+const verdictOf = (r) => (flags[id(r)] || {}).verdict;
+const commentOf = (r) => (flags[id(r)] || {}).comment || "";
+
+async function load() {
+  const data = await (await fetch("/data")).json();
+  rows = data.rows; flags = data.flags;
+  const groups = [...new Set(rows.map((r) => `${r.key}:${r.release}`))];
+  keySelect.replaceChildren(...groups.map((g) => {
+    const [key, release] = g.split(":");
+    const how = { early: "released early", gap: "", "gap-clamp": "repeats clamped", "early-clamp": "released early, repeats clamped" };
+    const label = how[release] ?? release.replace(/^gap-clamp-/, "repeats clamped ").replace(/_/g, ", ");
+    return new Option(`${key}${label ? " (" + label + ")" : ""}`, g);
+  }));
+  draw();
+}
+
+function shown() {
+  const [key, release] = keySelect.value.split(":");
+  return rows.filter((r) => r.key === Number(key) && r.release === release);
+}
+
+function draw() {
+  const mine = shown();
+  const intervals = [...new Set(mine.map((r) => r.interval))].sort((a, b) => a - b);
+  const firsts = [...new Set(mine.map((r) => r.first))].sort((a, b) => a - b);
+  const seconds = [...new Set(mine.map((r) => r.second))].sort((a, b) => a - b);
+  order = [];
+  const table = document.createElement("table");
+  table.innerHTML = "<tr><th></th>" + intervals.map((i) => `<th>${i}</th>`).join("") + "</tr>";
+  for (const first of firsts) for (const second of seconds) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td class="label">v${first} → v${second}</td>`;
+    for (const interval of intervals) {
+      const td = document.createElement("td");
+      const tries = mine.filter((r) => r.first === first && r.second === second && r.interval === interval)
+        .sort((a, b) => a.round - b.round);
+      if (!tries.length) td.innerHTML = '<span class="skip">–</span>';
+      for (const r of tries) {
+        const index = order.push(r) - 1;
+        const button = document.createElement("button");
+        const verdict = verdictOf(r);
+        button.className = `try ${r.result}` + (verdict ? " reviewed" : "") +
+          (verdict && verdictResult(verdict) !== r.result ? " disagree" : "") + (index === current ? " current" : "") +
+          (commentOf(r) ? " noted" : "");
+        button.textContent = verdict === "two" ? "2" : verdict === "one" ? "1" : "";
+        button.title = `${interval} ms, try ${r.round + 1}` + (commentOf(r) ? `: ${commentOf(r)}` : "");
+        button.addEventListener("click", () => select(index));
+        td.append(button);
+      }
+      tr.append(td);
+    }
+    table.append(tr);
+  }
+  document.getElementById("grid").replaceChildren(table);
+  const reviewed = mine.filter((r) => verdictOf(r));
+  const agree = reviewed.filter((r) => verdictResult(verdictOf(r)) === r.result).length;
+  document.getElementById("summary").textContent =
+    `${reviewed.length} of ${mine.length} pairs reviewed` +
+    (reviewed.length ? `; the detection agreed on ${agree} (${Math.round((agree / reviewed.length) * 100)}%)` : "");
+  showDetail();
+}
+
+function select(index) {
+  if (index < 0 || index >= order.length) return;
+  current = index;
+  const r = order[index];
+  audio.src = `/audio?key=${r.key}&release=${r.release}&i=${r.recording}`;
+  audio.play();
+  draw();
+}
+
+function showDetail() {
+  const box = document.getElementById("detail");
+  const r = order[current];
+  if (!r) { box.textContent = ""; return; }
+  const verdict = verdictOf(r);
+  const said = r.result === "both"
+    ? `both notes (second landed ${r.lands2_ms} ms after its press, table ${r.landing2_ms}; ${r.level2_db >= 0 ? "+" : ""}${r.level2_db} dB vs alone)`
+    : "second note missing";
+  box.innerHTML = `<div><b>v${r.first} → v${r.second}, ${r.interval} ms</b>, try ${r.round + 1}: the detection says ${said}.
+    First released at ${r.release1_ms} ms, pressed again at ${r.press2_ms} ms.</div>
+    <div style="margin-top:6px">You: <button data-v="two">Two notes (2)</button><button data-v="one">One note (1)</button>
+    <button data-v="">Clear (0)</button> <button data-play>Play again (space)</button>
+    <span class="muted">${verdict ? "you said " + (verdict === "two" ? "two notes" : "one note") : "not reviewed yet"}</span></div>
+    <div class="comment"><label for="comment">Comment</label><input id="comment" placeholder="e.g. bounces, weak, late">
+    <button data-save>Save comment (Enter)</button></div>`;
+  const input = box.querySelector("#comment");
+  input.value = commentOf(r);
+  const save = () => remember({ comment: input.value });
+  box.querySelector("[data-save]").addEventListener("click", save);
+  input.addEventListener("keydown", (e) => { if (e.key === "Enter") { save(); input.blur(); } });
+  box.querySelectorAll("[data-v]").forEach((b) => b.addEventListener("click", () => judge(b.dataset.v || null)));
+  box.querySelector("[data-play]").addEventListener("click", () => { audio.currentTime = 0; audio.play(); });
+}
+
+async function remember(change) {
+  const r = order[current];
+  if (!r) return;
+  const response = await fetch("/flags", { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ key: r.key, release: r.release, recording: r.recording, ...change }) });
+  flags = await response.json();
+  draw();
+}
+
+async function judge(verdict) {
+  const r = order[current];
+  if (!r) return;
+  // A comment typed but not saved yet goes with the verdict.
+  const input = document.getElementById("comment");
+  const change = { verdict };
+  if (input && input.value !== commentOf(r)) change.comment = input.value;
+  await remember(change);
+  if (verdict) {
+    const next = order.findIndex((x, i) => i > current && !verdictOf(x));
+    if (next >= 0) select(next);
+  }
+}
+
+document.addEventListener("keydown", (e) => {
+  if (["SELECT", "INPUT", "TEXTAREA"].includes(e.target.tagName)) return; // typing a comment
+  if (e.key === "2") judge("two");
+  else if (e.key === "1") judge("one");
+  else if (e.key === "0") judge(null);
+  else if (e.key === " ") { e.preventDefault(); audio.currentTime = 0; audio.play(); }
+  else if (e.key === "ArrowRight") select(current + 1);
+  else if (e.key === "ArrowLeft") select(current - 1);
+  else if (e.key === "n") select(order.findIndex((x) => !verdictOf(x)));
+});
+keySelect.addEventListener("change", () => { current = -1; draw(); });
+load();
+</script>
+</body>
+</html>

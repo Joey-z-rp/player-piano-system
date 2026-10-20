@@ -81,12 +81,9 @@ TIMING_MS = {
 
 # ============================================================================
 
-# The sustain pedal, pressed as a piece presses it (SUSTAIN_PEDAL_CHANNELS and
-# SUSTAIN_PEDAL_PRESS in include/app/piano/piano_controller.h). Stopping at the
-# end releases it, with every key.
-PEDAL_CHANNELS = (88, 89)
-PEDAL_PRESS = "100:30:100:30:55"
-PEDAL_RELEASE = "40:40:30:40:0"
+# The sustain pedal, pressed as a piece presses it (with the commands in the
+# controller's config). Stopping at the end releases it, with every key.
+PEDAL_CHANNELS = common.PEDAL_CHANNELS
 PEDAL_SETTLE_S = 0.25  # for the pedal to go down
 PEDAL_LIFT_S = 0.15  # for it to come up
 
@@ -180,8 +177,9 @@ class Player:
             print("Sustain pedal down for each note.")
 
     def set_pedal(self, down: bool) -> None:
+        command = self.piano.config()["pedal_press" if down else "pedal_release"]
         for channel in PEDAL_CHANNELS:
-            self.piano.send(f"P:{channel}:{PEDAL_PRESS if down else PEDAL_RELEASE}")
+            self.piano.send(f"P:{channel}:{command}")
         time.sleep(PEDAL_SETTLE_S if down else PEDAL_LIFT_S)
 
     def play(

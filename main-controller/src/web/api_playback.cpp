@@ -92,12 +92,12 @@ private:
   // Adds the next part to pending; false once everything is out.
   bool more()
   {
-    char text[96];
+    char text[128];
     switch (stage)
     {
     case 0:
-      snprintf(text, sizeof(text), "{\"leadMs\":%u,\"volume\":%u,\"contrast\":%u,\"voicing\":%u,\"notes\":[", leadMs,
-               dynamics.volume, dynamics.contrast, dynamics.voicing);
+      snprintf(text, sizeof(text), "{\"leadMs\":%u,\"volume\":%u,\"contrast\":%u,\"voicing\":%u,\"repeatBoost\":%u,"
+               "\"notes\":[", leadMs, dynamics.volume, dynamics.contrast, dynamics.voicing, dynamics.repeatBoost);
       stage++;
       break;
     case 1:
@@ -155,6 +155,7 @@ static void sendDynamics(AsyncWebServerRequest *request, PianoController &piano)
   doc["volume"] = dynamics.volume;
   doc["contrast"] = dynamics.contrast;
   doc["voicing"] = dynamics.voicing;
+  doc["repeatBoost"] = dynamics.repeatBoost;
   JsonArray parts = doc["parts"].to<JsonArray>();
   for (size_t i = 0; roll != nullptr && i < roll->partNames.size(); i++)
   {
@@ -178,7 +179,7 @@ static bool readSetting(JsonVariant value, const char *name, long low, long high
 // Checks everything given before setting any of it.
 static bool applyDynamics(JsonVariant json, PianoController &piano, std::string &error)
 {
-  long volume = -1, contrast = -1, voicing = -1;
+  long volume = -1, contrast = -1, voicing = -1, boost = -1;
   if (!json["volume"].isNull() && !readSetting(json["volume"], "volume", MIN_VOLUME, MAX_VOLUME, volume, error))
   {
     return false;
@@ -189,6 +190,11 @@ static bool applyDynamics(JsonVariant json, PianoController &piano, std::string 
     return false;
   }
   if (!json["voicing"].isNull() && !readSetting(json["voicing"], "voicing", MIN_VOICING, MAX_VOICING, voicing, error))
+  {
+    return false;
+  }
+  if (!json["repeatBoost"].isNull() &&
+      !readSetting(json["repeatBoost"], "repeatBoost", 0, MAX_REPEAT_BOOST, boost, error))
   {
     return false;
   }
@@ -222,6 +228,10 @@ static bool applyDynamics(JsonVariant json, PianoController &piano, std::string 
   if (voicing >= 0)
   {
     piano.setVoicing((uint16_t)voicing);
+  }
+  if (boost >= 0)
+  {
+    piano.setRepeatBoost((uint8_t)boost);
   }
   for (size_t i = 0; i < offsets.size(); i++)
   {
@@ -267,7 +277,9 @@ static void handleMidiUpload(AsyncWebServerRequest *request, PianoController &pi
   // A new piece starts with its parts as written (loadRoll resets their offsets).
   Dynamics dynamics = piano.dynamics();
   std::fill(dynamics.partOffset, dynamics.partOffset + MAX_MIDI_PARTS, 0);
-  if (!buildPianoRoll(events, *roll, piano.velocities(), dynamics))
+  PlayConfig rules = piano.playConfig();
+  roll->configVersion = piano.playConfigVersion();
+  if (!buildPianoRoll(events, *roll, piano.velocities(), dynamics, nullptr, &rules))
   {
     sendError(request, 500, "out of memory");
     return;
@@ -373,7 +385,8 @@ void registerPlaybackRoutes(AsyncWebServer &server, PianoController &piano)
     // While playing, the dynamics it's playing with; new ones apply from the
     // next Play (or going on from a pause).
     Dynamics dynamics = playback.state == PlaybackState::Playing ? loaded->dynamics : piano.dynamics();
-    if (!buildPianoRoll(*loaded->source, roll, piano.velocities(), dynamics, report.get()))
+    PlayConfig rules = piano.playConfig();
+    if (!buildPianoRoll(*loaded->source, roll, piano.velocities(), dynamics, report.get(), &rules))
     {
       sendError(request, 500, "out of memory");
       return;
@@ -479,7 +492,7 @@ void registerPlaybackRoutes(AsyncWebServer &server, PianoController &piano)
   volumeHandler->setMethod(HTTP_POST);
   server.addHandler(volumeHandler);
 
-  // GET /api/dynamics -> {"volume", "contrast", "voicing", "parts": [offset of
+  // GET /api/dynamics -> {"volume", "contrast", "voicing", "repeatBoost", "parts": [offset of
   // each of the loaded piece's parts]}; POST any of them to set them, e.g.
   // {"contrast": 130} or {"parts": [8, -8]}. They apply from the next Play.
   server.on("/api/dynamics", HTTP_GET, [&piano](AsyncWebServerRequest *request) { sendDynamics(request, piano); });

@@ -200,6 +200,27 @@ def measure_strike(
     return ("hit" if sustained else "too short"), peak_db, noise_db
 
 
+AUDIO_RETRIES = 5  # times to try again when the Mac's audio won't start a recording
+
+
+def start_audio(sd, start):
+    """Runs start() (which opens and starts a recording), trying again when the
+    Mac's audio system refuses for a moment (e.g. CoreAudio error -308, after
+    the screen locks or the microphone drops out briefly): it's restarted, and
+    each try waits a little longer. Only the start is retried, before anything
+    is sent to the piano."""
+    for attempt in range(AUDIO_RETRIES + 1):
+        try:
+            return start()
+        except sd.PortAudioError as error:
+            if attempt == AUDIO_RETRIES:
+                raise
+            print(f"  the audio wouldn't start ({error}); restarting it and trying again", flush=True)
+            sd._terminate()
+            time.sleep(1 + attempt)
+            sd._initialize()
+
+
 class Recorder:
     def __init__(self, device, sample_rate: int):
         import sounddevice  # only needed when recording
@@ -211,13 +232,13 @@ class Recorder:
     def record(self, seconds: float, during) -> np.ndarray:
         """Records for `seconds`, calling during() once recording has started."""
         frames = int(seconds * self.sample_rate)
-        audio = self.sd.rec(
+        audio = start_audio(self.sd, lambda: self.sd.rec(
             frames,
             samplerate=self.sample_rate,
             channels=1,
             dtype="float32",
             device=self.device,
-        )
+        ))
         during()
         self.sd.wait()
         return audio[:, 0]
@@ -248,12 +269,21 @@ class TimedRecorder:
             blocks.append(indata[:, 0].copy())
             recorded[0] += count
 
-        with self.sd.InputStream(samplerate=self.sample_rate, channels=1, dtype="float32",
-                                 device=self.device, callback=callback) as stream:
+        def open_stream():
+            stream = self.sd.InputStream(samplerate=self.sample_rate, channels=1, dtype="float32",
+                                         device=self.device, callback=callback)
+            stream.start()
+            return stream
+
+        stream = start_audio(self.sd, open_stream)  # started already, so not used with `with` (that starts it again)
+        try:
             during()
             while recorded[0] < frames:
                 time.sleep(0.01)
             latency = stream.latency
+        finally:
+            stream.stop()
+            stream.close()
 
         # The stream clock and time.monotonic() differ by a fixed offset. Each
         # callback reads monotonic a little after the stream time, so the
@@ -423,6 +453,16 @@ class Connection:
     def release_everything(self) -> None:
         raise NotImplementedError
 
+    def config(self) -> dict:
+        """The controller's play config (include/app/piano/play_config.h): the
+        timing rules it plays pieces with, set on its config page."""
+        if not hasattr(self, "_config"):
+            self._config = self._read_config()
+        return self._config
+
+    def _read_config(self) -> dict:
+        raise NotImplementedError
+
     def reset_drivers(self) -> None:
         """Restarts every driver board, then waits DRIVER_RESET_WAIT_S."""
         self._reset_drivers()
@@ -449,6 +489,24 @@ class Connection:
         if not (pressed_cleanly and released_cleanly):
             self.release_everything()  # in case anything was left held during the outage
         return pressed_cleanly
+
+
+    def play_sequence(self, commands: list[tuple[float, str]]) -> list[float]:
+        """After PRE_ROLL_MS of silence, sends each (ms after the first,
+        command) as close to on time as the link allows. Returns when each
+        actually went out (time.monotonic()), so the real timing can be used."""
+        time.sleep(PRE_ROLL_MS / 1000)
+        start = time.monotonic()
+        sent = []
+        for at_ms, command in commands:
+            due = start + at_ms / 1000
+            while due - time.monotonic() > 0.003:
+                time.sleep(due - time.monotonic() - 0.002)
+            while time.monotonic() < due:
+                pass
+            sent.append(time.monotonic())
+            self.send(command)
+        return sent
 
 
 class WifiConnection(Connection):
@@ -512,6 +570,13 @@ class WifiConnection(Connection):
     def _reset_drivers(self) -> None:
         self._post_until_sent("/api/driver/reset")
 
+    def _read_config(self) -> dict:
+        try:
+            with urllib.request.urlopen(self.base + "/api/config", timeout=5) as response:
+                return json.loads(response.read())["config"]
+        except (OSError, urllib.error.URLError) as error:
+            sys.exit(f"Couldn't read the controller's config ({error}). Is its firmware up to date?")
+
 
 class UsbConnection(Connection):
     """Sends driver commands over the controller's USB serial port (see
@@ -553,20 +618,25 @@ class UsbConnection(Connection):
                         f"The controller didn't answer on {port}. Is its firmware up to date?"
                     )
 
-    def _command(self, text: str) -> None:
+    def _command(self, text: str) -> str | None:
+        """Sends a command and waits for its #OK. Returns the last other line
+        starting with "#" before it (a reply such as #CONFIG), if any."""
         for _ in range(50):
+            reply = None
             self.serial.reset_input_buffer()  # drop log output from earlier
             self.serial.write((text + "\n").encode())
             deadline = time.monotonic() + self.REPLY_TIMEOUT_S
             while time.monotonic() < deadline:
                 line = self.serial.readline().decode(errors="replace").strip()
                 if line == "#OK":
-                    return
+                    return reply
                 if line.startswith("#ERR"):
                     reason = line[5:]
                     if reason == "queue full":
                         break  # the controller is catching up; try again
                     sys.exit(f"{text}: controller replied {reason}")
+                if line.startswith("#"):
+                    reply = line
             else:
                 raise TimeoutError(text)
             time.sleep(0.05)
@@ -586,6 +656,12 @@ class UsbConnection(Connection):
 
     def _reset_drivers(self) -> None:
         self.send("RESET")
+
+    def _read_config(self) -> dict:
+        reply = self._command("CONFIG")
+        if not reply or not reply.startswith("#CONFIG "):
+            sys.exit("The controller didn't send its config. Is its firmware up to date?")
+        return json.loads(reply[len("#CONFIG "):])
 
 
 def connect(args) -> Connection:
@@ -648,19 +724,18 @@ def wait_until_quiet(
 # times, and what it falls back to when the table doesn't say
 # (DriveSettings in include/app/piano/velocity_table.h). calibrate_dynamics.py's
 # settings go into each table's "drive".
-# The sustain pedal, pressed and released as the controller does
-# (SUSTAIN_PEDAL_* in include/app/piano/piano_controller.h).
+# The sustain pedal, pressed and released with the commands in the
+# controller's config (SUSTAIN_PEDAL_CHANNELS in include/app/piano/piano_controller.h).
 PEDAL_CHANNELS = (88, 89)
-PEDAL_PRESS = "100:30:100:30:55"
-PEDAL_RELEASE = "40:40:30:40:0"
 PEDAL_SETTLE_S = 0.6  # after pressing it: down, and its thump died away, before a strike is recorded
 PEDAL_LIFT_S = 0.3  # after releasing it
 
 
 def set_pedal(piano: "Connection", down: bool) -> None:
     """Presses or releases the sustain pedal, then waits for it to settle."""
+    command = piano.config()["pedal_press" if down else "pedal_release"]
     for channel in PEDAL_CHANNELS:
-        piano.send(f"P:{channel}:{PEDAL_PRESS if down else PEDAL_RELEASE}")
+        piano.send(f"P:{channel}:{command}")
     time.sleep(PEDAL_SETTLE_S if down else PEDAL_LIFT_S)
 
 
@@ -679,7 +754,8 @@ def by_duty(value, duty: float):
     return [v for above, v in value if duty > above or above == 0][-1]
 
 
-def drive_command(key: int, duty: float, landing_ms: float | None, drive: dict, entry: dict | None = None) -> str:
+def drive_command(key: int, duty: float, landing_ms: float | None, drive: dict, entry: dict | None = None,
+                  repeat_clamp: tuple | None = None) -> str:
     """The press the controller sends (VelocityTable::pressCommand). The strike
     duty for strike_ms; then the coast duty, carrying the hammer through its
     flight; then:
@@ -690,7 +766,10 @@ def drive_command(key: int, duty: float, landing_ms: float | None, drive: dict, 
         into a second strike, then the hold.
     Nothing starts before the strike ends. `entry` is the key's table entry,
     which can set its own of each (KEY_DRIVE_FIELDS); all but "coast" can be
-    steps by strike duty (see by_duty). Without a landing time, a plain press."""
+    steps by strike duty (see by_duty). A repeat (struck again soon after the
+    last on its key) is clamped with repeat_clamp (offset, ms, duty: see
+    repeat_clamp() for the controller's) instead, unless its ms is 0. Without a
+    landing time, a plain press."""
     entry = entry or {}
     if not landing_ms:
         return f"P:{key}:{format_duty(duty)}"
@@ -701,14 +780,23 @@ def drive_command(key: int, duty: float, landing_ms: float | None, drive: dict, 
 
     strike_ms = drive["strike_ms"]
     coast = format_duty(setting("coast_duty"))
-    clamp_ms = round(setting("clamp_ms"))
+    if repeat_clamp and repeat_clamp[1] > 0:
+        offset, clamp_ms, clamp_duty = repeat_clamp
+    else:
+        offset, clamp_ms, clamp_duty = setting("clamp_offset_ms"), setting("clamp_ms"), setting("clamp_duty")
+    clamp_ms = round(clamp_ms)
     if clamp_ms > 0:
-        clamp_at = max(round(landing_ms + setting("clamp_offset_ms")), strike_ms)
-        phases = f"{coast}:{clamp_at - strike_ms}:{format_duty(setting('clamp_duty'))}:{clamp_ms}"
+        clamp_at = max(round(landing_ms + offset), strike_ms)
+        phases = f"{coast}:{clamp_at - strike_ms}:{format_duty(clamp_duty)}:{clamp_ms}"
     else:
         hold_at = max(round(landing_ms + setting("coast_offset_ms")), strike_ms)
         phases = f"{coast}:{hold_at - strike_ms}"
     return f"P:{key}:{format_duty(duty)}:{strike_ms}:{phases}:{format_duty(setting('hold_duty'))}"
+
+
+def repeat_clamp(config: dict) -> tuple:
+    """The controller's repeat clamp (offset, ms, duty), from its config."""
+    return (config["repeat_clamp_offset_ms"], config["repeat_clamp_ms"], config["repeat_clamp_duty"])
 
 
 def format_duty(duty: float) -> str:
@@ -757,3 +845,55 @@ def devices(_args) -> None:
     import sounddevice
 
     print(sounddevice.query_devices())
+
+
+# --- the tests' shared parts ---------------------------------------------------
+
+
+class Session:
+    """A connection to the controller, the microphone (to wait for quiet and to
+    record strikes), and the room's background level."""
+
+    def __init__(self, args, piano: "Connection | None" = None):
+        self.args = args
+        self.piano = piano or connect(args)
+        self.recorder = Recorder(args.device, args.sample_rate)  # for waiting until quiet
+        self.timed = TimedRecorder(args.device, args.sample_rate)  # for the strikes
+        self.sos = a_weighting(args.sample_rate)
+        self.room_db = measure_room(self.recorder, self.sos)
+
+
+def add_session_args(p) -> None:
+    """The command-line options a Session needs, with the settings above as defaults."""
+    p.add_argument("--connection", choices=["usb", "wifi"], default=CONNECTION)
+    p.add_argument("--port", default=SERIAL_PORT)
+    p.add_argument("--host", default=HOST)
+    p.add_argument("--device", default=DEVICE, type=lambda v: int(v) if v.isdigit() else v)
+    p.add_argument("--sample-rate", type=int, default=SAMPLE_RATE)
+    p.add_argument("--margin-db", type=float, default=MARGIN_DB)
+    p.add_argument("--gain-db", type=float, default=MIC_GAIN_DB)
+
+
+def table_command(key: int, velocity: int, table: dict, pedal: bool = False) -> str:
+    """The press the controller sends for this key and velocity, from a
+    velocity table (its JSON); with the pedal down, from the key's pedal entry
+    if it has one."""
+    entry = table["keys"][str(key)]
+    if pedal and "pedal" in entry:
+        entry = entry["pedal"]
+    landing = entry.get("landing_ms") or table.get("landing_ms")
+    drive = {**DEFAULT_DRIVE, **table.get("drive", {})}
+    duty = entry["duty"][velocity - 1]
+    return drive_command(key, duty, landing[velocity - 1] if landing else None, drive, entry)
+
+
+def table_landing(key: int, velocity: int, table: dict, pedal: bool = False) -> int:
+    """When the key's hammer lands at this velocity (ms after the press), from a velocity table."""
+    entry = table["keys"][str(key)]
+    if pedal and "pedal" in entry:
+        entry = entry["pedal"]
+    landing = entry.get("landing_ms") or table.get("landing_ms")
+    if not landing:
+        sys.exit("the velocity table has no landing times")
+    return landing[velocity - 1]
+

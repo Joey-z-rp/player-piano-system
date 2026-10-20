@@ -6,6 +6,7 @@
 #include "app/piano/piano_roll.h"
 
 class VelocityTable;
+struct PlayConfig;
 
 // What became of each written note, for showing what the builder changed.
 enum NoteChange : uint8_t
@@ -15,7 +16,8 @@ enum NoteChange : uint8_t
   NOTE_SHORTENED = 4,        // released early, so the key can reset before its next strike
   NOTE_LENGTHENED = 8,       // held on until its hammer has landed
   NOTE_VELOCITY_LIMITED = 16, // the dynamics took it past 1-127
-  NOTE_DUPLICATE = 32         // the same note again at the same moment and velocity: played once
+  NOTE_DUPLICATE = 32,        // the same note again at the same moment and velocity: played once
+  NOTE_REPEAT_BOOSTED = 64    // a repeat played louder (Dynamics::repeatBoost), so it can strike again sooner
 };
 
 struct NoteReport
@@ -54,10 +56,11 @@ struct RollReport
 // each press is sent early by its hammer's landing time, so soft and loud
 // notes sound when the MIDI says (see allowForLanding). The velocities are
 // shaped by dynamics first (see shapeVelocities; kept within 1-127). With a
-// report, it also says what became of every note and the pedal. Returns
-// false if it runs out of memory.
+// report, it also says what became of every note and the pedal. The timing
+// rules come from config (the defaults without one). Returns false if it runs
+// out of memory.
 bool buildPianoRoll(const std::vector<MidiEvent> &events, PianoRoll &roll, const VelocityTable *timing,
-                    const Dynamics &dynamics, RollReport *report = nullptr);
+                    const Dynamics &dynamics, RollReport *report = nullptr, const PlayConfig *config = nullptr);
 // The same, with only a volume.
 bool buildPianoRoll(const std::vector<MidiEvent> &events, PianoRoll &roll, const VelocityTable *timing = nullptr,
                     uint16_t volume = 100, RollReport *report = nullptr);

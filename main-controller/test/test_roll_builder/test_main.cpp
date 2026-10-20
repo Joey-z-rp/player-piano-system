@@ -144,18 +144,56 @@ void test_repeat_with_no_gap_is_released_earlier()
   assertRoll({{0, PRESS, C4_KEY, 64}, {230, RELEASE, C4_KEY, 0}, {300, PRESS, C4_KEY, 64}, {600, RELEASE, C4_KEY, 0}});
 }
 
-void test_repeat_with_enough_gap_is_unchanged()
+void test_repeat_is_sent_early_and_marked()
 {
+  // 200 ms after the last C4 is a repeat: sent 10 ms early (its hammer lands
+  // later) and marked, so it's clamped as one.
   build({on(0, C4), off(100, C4), on(200, C4), off(300, C4)});
-  assertRoll({{0, PRESS, C4_KEY, 64}, {100, RELEASE, C4_KEY, 0}, {200, PRESS, C4_KEY, 64}, {300, RELEASE, C4_KEY, 0}});
+  assertRoll({{0, PRESS, C4_KEY, 64}, {100, RELEASE, C4_KEY, 0}, {190, PRESS, C4_KEY, 64}, {300, RELEASE, C4_KEY, 0}});
   TEST_ASSERT_EQUAL_UINT32(0, roll.mergedNotes);
+  TEST_ASSERT_FALSE(roll.events[0].repeat);
+  TEST_ASSERT_TRUE(roll.events[2].repeat);
+}
+
+void test_strike_long_after_the_last_is_not_a_repeat()
+{
+  build({on(0, C4), off(100, C4), on(300, C4), off(400, C4)});
+  assertRoll({{0, PRESS, C4_KEY, 64}, {100, RELEASE, C4_KEY, 0}, {300, PRESS, C4_KEY, 64}, {400, RELEASE, C4_KEY, 0}});
+  TEST_ASSERT_FALSE(roll.events[2].repeat);
+}
+
+void test_repeat_limits_follow_the_repeats_velocity()
+{
+  // After velocity 64: a loud repeat (112) plays from 90 ms, a medium one (64) from 150.
+  build({on(0, C4, 64), off(50, C4), on(100, C4, 112), off(200, C4)});
+  TEST_ASSERT_EQUAL_UINT32(0, roll.mergedNotes);
+  build({on(0, C4, 64), off(50, C4), on(140, C4, 64), off(250, C4)});
+  TEST_ASSERT_EQUAL_UINT32(1, roll.mergedNotes);
+  build({on(0, C4, 64), off(50, C4), on(150, C4, 64), off(250, C4)});
+  TEST_ASSERT_EQUAL_UINT32(0, roll.mergedNotes);
+  // After a loud note (112), a loud repeat needs 120 ms.
+  build({on(0, C4, 112), off(50, C4), on(110, C4, 112), off(200, C4)});
+  TEST_ASSERT_EQUAL_UINT32(1, roll.mergedNotes);
+  build({on(0, C4, 112), off(50, C4), on(120, C4, 112), off(200, C4)});
+  TEST_ASSERT_EQUAL_UINT32(0, roll.mergedNotes);
+}
+
+void test_repeats_around_88_skip_their_dead_zone()
+{
+  // After a softer note, a repeat at 88 plays at 90-104 ms and from 120, not in between.
+  for (uint32_t interval : {95u, 110u, 125u})
+  {
+    build({on(0, C4, 64), off(50, C4), on(interval, C4, 88), off(300, C4)});
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(interval == 110 ? 1 : 0, roll.mergedNotes, "interval");
+  }
 }
 
 void test_fast_repeats_keep_as_many_strikes_as_possible()
 {
-  // 4 strikes 60 ms apart: a key can strike every 80 ms, so every other one plays.
+  // 4 strikes 60 ms apart at velocity 64, which can repeat from 150 ms: the
+  // first and fourth play, the fourth sent 10 ms early as a repeat.
   build({on(0, C4), off(50, C4), on(60, C4), off(110, C4), on(120, C4), off(170, C4), on(180, C4), off(230, C4)});
-  assertRoll({{0, PRESS, C4_KEY, 64}, {50, RELEASE, C4_KEY, 0}, {120, PRESS, C4_KEY, 64}, {230, RELEASE, C4_KEY, 0}});
+  assertRoll({{0, PRESS, C4_KEY, 64}, {100, RELEASE, C4_KEY, 0}, {170, PRESS, C4_KEY, 64}, {230, RELEASE, C4_KEY, 0}});
   TEST_ASSERT_EQUAL_UINT32(2, roll.noteCount);
   TEST_ASSERT_EQUAL_UINT32(2, roll.mergedNotes);
 }
@@ -230,10 +268,10 @@ void test_pedal_moves_by_the_lead()
 void test_soft_repeats_need_time_for_the_hammer_to_land()
 {
   VelocityTable table = landingTable();
-  // 200 ms apart is too soon for a hammer that takes 130 ms to land (it needs 130 + 10 + 70)...
-  build({on(0, C4, 20), off(100, C4), on(200, C4, 20), off(300, C4)}, &table);
+  // A soft repeat (velocity 20) needs 195 ms...
+  build({on(0, C4, 20), off(100, C4), on(150, C4, 20), off(300, C4)}, &table);
   TEST_ASSERT_EQUAL_UINT32(1, roll.mergedNotes);
-  // ...300 ms is enough, with the first released 70 ms before the second.
+  // ...and the first note is held until 70 ms before the second press.
   build({on(0, C4, 20), off(100, C4), on(300, C4, 20), off(400, C4)}, &table);
   assertRoll({{19, PRESS, C4_KEY, 20}, {249, RELEASE, C4_KEY, 0}, {319, PRESS, C4_KEY, 20}, {549, RELEASE, C4_KEY, 0}});
 }
@@ -679,6 +717,61 @@ void test_report_says_each_notes_part()
   TEST_ASSERT_EQUAL_UINT8(1, report.notes[1].part);
 }
 
+void test_repeat_boost_lets_a_soft_repeat_play()
+{
+  // A repeat at velocity 38, 140 ms after the last, needs 195 ms: merged. With a
+  // boost of 40 it plays at 78, which can repeat from 90 ms.
+  std::vector<MidiEvent> events = {on(0, C4, 38), off(50, C4), on(140, C4, 38), off(300, C4)};
+  buildReport(events);
+  TEST_ASSERT_EQUAL_UINT32(1, roll.mergedNotes);
+  Dynamics dynamics;
+  dynamics.repeatBoost = 40;
+  TEST_ASSERT_TRUE(buildPianoRoll(events, roll, nullptr, dynamics, &report));
+  TEST_ASSERT_EQUAL_UINT32(0, roll.mergedNotes);
+  std::vector<uint8_t> velocities = pressVelocities();
+  TEST_ASSERT_EQUAL_UINT8(38, velocities[0]); // the first isn't a repeat
+  TEST_ASSERT_EQUAL_UINT8(78, velocities[1]);
+  TEST_ASSERT_EQUAL(NOTE_REPEAT_BOOSTED, report.notes[1].changes);
+  TEST_ASSERT_EQUAL_UINT8(78, report.notes[1].playedVelocity);
+}
+
+void test_repeat_boost_leaves_merged_repeats_alone()
+{
+  // 60 ms is too soon even boosted: merged, at its own velocity, so the note
+  // it's held in stays as loud as it was.
+  Dynamics dynamics;
+  dynamics.repeatBoost = 40;
+  TEST_ASSERT_TRUE(buildPianoRoll({on(0, C4, 60), off(50, C4), on(60, C4, 50), off(300, C4)}, roll, nullptr, dynamics,
+                                  &report));
+  TEST_ASSERT_EQUAL_UINT32(1, roll.mergedNotes);
+  TEST_ASSERT_EQUAL_UINT8(60, pressVelocities()[0]);
+  TEST_ASSERT_EQUAL(NOTE_MERGED, report.notes[1].changes);
+}
+
+void test_boosted_repeat_is_timed_for_its_louder_landing()
+{
+  // Landing 150 - velocity, lead 149. C4 at velocity 40, 200 ms after the last:
+  // boosted to 80, it lands 70 ms after its press (not 110), so it's pressed
+  // 40 ms later, and 10 ms early as a repeat: 1200 + 149 - 70 - 10.
+  VelocityTable table = landingTable();
+  Dynamics dynamics;
+  dynamics.repeatBoost = 40;
+  TEST_ASSERT_TRUE(buildPianoRoll({on(1000, C4, 40), off(1100, C4), on(1200, C4, 40), off(1500, C4)}, roll, &table,
+                                  dynamics));
+  std::vector<RollEvent> presses;
+  for (const RollEvent &event : roll.events)
+  {
+    if (event.type == RollEventType::KeyPress)
+    {
+      presses.push_back(event);
+    }
+  }
+  TEST_ASSERT_EQUAL(2, presses.size());
+  TEST_ASSERT_EQUAL_UINT8(80, presses[1].velocity);
+  TEST_ASSERT_EQUAL_UINT32(1200 + 149 - 70 - 10, presses[1].timeMs);
+  TEST_ASSERT_TRUE(presses[1].repeat);
+}
+
 int main()
 {
   UNITY_BEGIN();
@@ -690,7 +783,13 @@ int main()
   RUN_TEST(test_overlapping_note_waits_for_its_own_note_off);
   RUN_TEST(test_repeat_with_short_gap_is_released_earlier);
   RUN_TEST(test_repeat_with_no_gap_is_released_earlier);
-  RUN_TEST(test_repeat_with_enough_gap_is_unchanged);
+  RUN_TEST(test_repeat_is_sent_early_and_marked);
+  RUN_TEST(test_strike_long_after_the_last_is_not_a_repeat);
+  RUN_TEST(test_repeat_limits_follow_the_repeats_velocity);
+  RUN_TEST(test_repeats_around_88_skip_their_dead_zone);
+  RUN_TEST(test_repeat_boost_lets_a_soft_repeat_play);
+  RUN_TEST(test_repeat_boost_leaves_merged_repeats_alone);
+  RUN_TEST(test_boosted_repeat_is_timed_for_its_louder_landing);
   RUN_TEST(test_fast_repeats_keep_as_many_strikes_as_possible);
   RUN_TEST(test_grace_note_merges_into_main_note_at_louder_velocity);
   RUN_TEST(test_repeats_on_other_keys_are_independent);

@@ -1,4 +1,5 @@
 #include "web/web_server.h"
+#include "web/api_config.h"
 #include "web/api_driver.h"
 #include "web/api_playback.h"
 #include "web/api_response.h"
@@ -17,6 +18,7 @@ bool WebServerModule::begin(PianoController &piano)
     return false;
   }
 
+  registerConfigRoutes(server, piano);
   registerDriverRoutes(server, piano);
   registerPlaybackRoutes(server, piano);
   registerStatusRoutes(server, piano);

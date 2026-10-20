@@ -11,12 +11,14 @@ static const char SETTINGS_NAMESPACE[] = "piano";
 static const char VOLUME_KEY[] = "volume";
 static const char CONTRAST_KEY[] = "contrast";
 static const char VOICING_KEY[] = "voicing";
+static const char REPEAT_BOOST_KEY[] = "repeatBoost";
+static const char CONFIG_KEY[] = "playConfig";
 static const UBaseType_t PLAYER_TASK_PRIORITY = 3; // above loop()
 static const BaseType_t PLAYER_TASK_CORE = 1;      // Wi-Fi runs on core 0
 
 PianoController::PianoController()
     : rs485(nullptr), velocityTable(nullptr), messageQueue(nullptr), state(PlaybackState::Idle),
-      volumePercent(DEFAULT_VOLUME), contrastPercent(100), voicingPercent(100), partOffsets(), playStartMs(0),
+      volumePercent(DEFAULT_VOLUME), contrastPercent(100), voicingPercent(100), repeatBoost(0), partOffsets(), configVersion(1), playStartMs(0),
       pausedAtMs(0),
       nextEvent(0), startUs(0), nextSkipped(0)
 {
@@ -35,7 +37,15 @@ bool PianoController::init(Rs485Module *rs485, const VelocityTable *velocityTabl
     contrastPercent = (saved >= MIN_CONTRAST && saved <= MAX_CONTRAST) ? saved : 100;
     saved = settings.getUShort(VOICING_KEY, 100);
     voicingPercent = (saved >= MIN_VOICING && saved <= MAX_VOICING) ? saved : 100;
+    saved = settings.getUShort(REPEAT_BOOST_KEY, 0);
+    repeatBoost = saved <= MAX_REPEAT_BOOST ? saved : 0;
+    String savedConfig = settings.getString(CONFIG_KEY, "");
     settings.end();
+    std::string error;
+    if (savedConfig.length() > 0 && !readPlayConfig(savedConfig.c_str(), savedConfig.length(), config, error))
+    {
+      Serial.printf("Saved play config not used (%s): using the defaults\n", error.c_str());
+    }
   }
   messageQueue = xQueueCreate(DRIVER_COMMAND_QUEUE_LENGTH, sizeof(Message));
   if (messageQueue == nullptr)
@@ -224,6 +234,17 @@ bool PianoController::setVoicing(uint16_t percent)
   return true;
 }
 
+bool PianoController::setRepeatBoost(uint8_t velocities)
+{
+  if (velocities > MAX_REPEAT_BOOST)
+  {
+    return false;
+  }
+  repeatBoost = velocities;
+  saveSetting(REPEAT_BOOST_KEY, velocities);
+  return true;
+}
+
 bool PianoController::setPartOffset(uint8_t part, int8_t velocities)
 {
   if (part >= MAX_MIDI_PARTS || velocities < -MAX_PART_OFFSET || velocities > MAX_PART_OFFSET)
@@ -234,12 +255,64 @@ bool PianoController::setPartOffset(uint8_t part, int8_t velocities)
   return true;
 }
 
+PlayConfig PianoController::playConfig() const
+{
+  std::lock_guard<std::mutex> lock(configMutex);
+  return config;
+}
+
+uint32_t PianoController::playConfigVersion() const
+{
+  return configVersion;
+}
+
+void PianoController::saveConfig(const PlayConfig &saved)
+{
+  Preferences settings;
+  if (settings.begin(SETTINGS_NAMESPACE, false))
+  {
+    settings.putString(CONFIG_KEY, playConfigJson(saved).c_str());
+    settings.end();
+  }
+}
+
+bool PianoController::setPlayConfig(const char *json, size_t length, std::string &error)
+{
+  std::lock_guard<std::mutex> lock(configMutex);
+  PlayConfig next = config;
+  if (!readPlayConfig(json, length, next, error))
+  {
+    return false;
+  }
+  if (next != config)
+  {
+    config = next;
+    configVersion++;
+    saveConfig(next);
+  }
+  return true;
+}
+
+void PianoController::resetPlayConfig()
+{
+  std::lock_guard<std::mutex> lock(configMutex);
+  config = PlayConfig();
+  configVersion++;
+  Preferences settings;
+  if (settings.begin(SETTINGS_NAMESPACE, false))
+  {
+    settings.remove(CONFIG_KEY);
+    settings.end();
+  }
+}
+
 Dynamics PianoController::dynamics() const
 {
   Dynamics now;
   now.volume = volumePercent;
   now.contrast = contrastPercent;
   now.voicing = voicingPercent;
+  now.repeatBoost = repeatBoost;
   for (uint8_t part = 0; part < MAX_MIDI_PARTS; part++)
   {
     now.partOffset[part] = partOffsets[part];
@@ -347,10 +420,10 @@ void PianoController::handleMessage(const Message &message)
     restartDrivers();
     break;
   case MessageType::PedalDown:
-    sendPedal(SUSTAIN_PEDAL_PRESS);
+    sendPedal(true);
     break;
   case MessageType::PedalUp:
-    sendPedal(SUSTAIN_PEDAL_RELEASE);
+    sendPedal(false);
     break;
   }
 }
@@ -363,8 +436,8 @@ void PianoController::restartDrivers()
   Serial.println("Drivers restarted");
 }
 
-// Builds the loaded piece again if the dynamics have changed since it was
-// built, from the MIDI it came from.
+// Builds the loaded piece again if the dynamics or the play config have
+// changed since it was built, from the MIDI it came from.
 void PianoController::rebuildForDynamics()
 {
   std::shared_ptr<const PianoRoll> loaded;
@@ -373,12 +446,16 @@ void PianoController::rebuildForDynamics()
     loaded = loadedRoll;
   }
   Dynamics now = dynamics();
-  if (loaded == nullptr || loaded->source == nullptr || loaded->dynamics == now)
+  uint32_t version = configVersion;
+  if (loaded == nullptr || loaded->source == nullptr ||
+      (loaded->dynamics == now && loaded->configVersion == version))
   {
     return;
   }
+  PlayConfig rules = playConfig();
   std::shared_ptr<PianoRoll> rebuilt = std::make_shared<PianoRoll>();
-  if (!buildPianoRoll(*loaded->source, *rebuilt, velocityTable, now))
+  rebuilt->configVersion = version;
+  if (!buildPianoRoll(*loaded->source, *rebuilt, velocityTable, now, nullptr, &rules))
   {
     Serial.println("Out of memory rebuilding for the new dynamics: playing as before");
     return;
@@ -391,13 +468,14 @@ void PianoController::rebuildForDynamics()
   {
     loadedRoll = rebuilt;
   }
-  Serial.printf("Rebuilt \"%s\" for volume %u%%, contrast %u%%, voicing %u%%\n", rebuilt->title.c_str(), now.volume,
-                now.contrast, now.voicing);
+  Serial.printf("Rebuilt \"%s\" for volume %u%%, contrast %u%%, voicing %u%%, repeats +%u\n", rebuilt->title.c_str(),
+                now.volume, now.contrast, now.voicing, now.repeatBoost);
 }
 
 void PianoController::startPlayback(uint32_t fromMs)
 {
   rebuildForDynamics();
+  playingConfig = playConfig();
   restartDrivers();
 
   // Take the roll and mark it playing under one lock, so loadRoll() can't
@@ -421,6 +499,7 @@ void PianoController::startPlayback(uint32_t fromMs)
 void PianoController::resumePlayback(uint32_t fromMs)
 {
   rebuildForDynamics();
+  playingConfig = playConfig();
   {
     std::lock_guard<std::mutex> lock(rollMutex);
     if (loadedRoll == nullptr)
@@ -442,8 +521,8 @@ void PianoController::playFrom(uint32_t fromMs)
   uint32_t settleMs = 0;
   if (start.pedalDown)
   {
-    sendPedal(SUSTAIN_PEDAL_PRESS);
-    settleMs = PEDAL_SETTLE_MS;
+    sendPedal(true);
+    settleMs = playingConfig.pedalSettleMs;
   }
   nextEvent = start.index;
   skipReleases = start.skipReleases;
@@ -491,7 +570,7 @@ void PianoController::sendRollEvent(const RollEvent &event)
   switch (event.type)
   {
   case RollEventType::KeyPress:
-    sendPress(event.key, event.velocity, event.pedal);
+    sendPress(event.key, event.velocity, event.pedal, event.repeat);
     break;
   case RollEventType::KeyRelease:
     if (skipReleases.test(event.key))
@@ -503,10 +582,10 @@ void PianoController::sendRollEvent(const RollEvent &event)
     send(command);
     break;
   case RollEventType::SustainOn:
-    sendPedal(SUSTAIN_PEDAL_PRESS);
+    sendPedal(true);
     break;
   case RollEventType::SustainOff:
-    sendPedal(SUSTAIN_PEDAL_RELEASE);
+    sendPedal(false);
     break;
   }
 }
@@ -519,11 +598,13 @@ void PianoController::releaseAll()
     snprintf(command, sizeof(command), "R:%u:0", key);
     send(command);
   }
-  sendPedal(SUSTAIN_PEDAL_RELEASE);
+  sendPedal(false);
 }
 
-void PianoController::sendPedal(const char *params)
+void PianoController::sendPedal(bool down)
 {
+  PlayConfig rules = playConfig();
+  const char *params = down ? rules.pedalPress : rules.pedalRelease;
   char command[DRIVER_COMMAND_MAX_LENGTH + 1];
   for (uint8_t channel : SUSTAIN_PEDAL_CHANNELS)
   {
@@ -542,10 +623,11 @@ bool PianoController::send(const char *command)
   return true;
 }
 
-void PianoController::sendPress(uint8_t key, uint8_t velocity, bool pedal)
+void PianoController::sendPress(uint8_t key, uint8_t velocity, bool pedal, bool repeat)
 {
   char command[DRIVER_COMMAND_MAX_LENGTH + 1];
-  velocityTable->pressCommand(key, velocity, command, sizeof(command), pedal);
+  velocityTable->pressCommand(key, velocity, command, sizeof(command), pedal,
+                              repeat ? &playingConfig.repeatClamp : nullptr);
   send(command);
 }
 

@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Config</title>
+<link rel="stylesheet" href="/assets/style.css">
+<style>
+  fieldset { border: 1px solid #e1e0d9; border-radius: 6px; margin: 16px 0; padding: 8px 14px 12px; }
+  legend { font-weight: 600; padding: 0 4px; }
+  .row { display: grid; grid-template-columns: 14rem 6rem 1fr; gap: 8px; align-items: center; margin: 6px 0; }
+  .row input { width: 6rem; font: 15px monospace; flex: none; }
+  .row input.wide { width: 12rem; }
+  .row.wide { grid-template-columns: 14rem 13rem 1fr; }
+  .hint { color: #5f5e5a; font-size: 13px; }
+  .default { color: #8a8984; font-size: 12px; }
+  .changed input { border-color: #e07b28; }
+  table.limits { border-collapse: collapse; margin: 6px 0; }
+  table.limits th { font-weight: 600; font-size: 13px; color: #5f5e5a; padding: 2px 8px 2px 0; text-align: left; }
+  table.limits td { padding: 2px 8px 2px 0; }
+  table.limits input { width: 5rem; font: 15px monospace; flex: none; }
+  .actions { display: flex; gap: 8px; align-items: center; margin: 16px 0; flex-wrap: wrap; }
+  #message { font-size: 14px; }
+  #message.error { color: #b3261e; }
+</style>
+</head>
+<body>
+<h1>Config</h1>
+<p class="hint">How pieces are played: the timing rules the piano was measured to need. Changes are saved on the
+  controller and apply from the next Play. What the calibration measures (the velocity table) isn't here.
+  <a href="/play">Play</a></p>
+
+<fieldset>
+  <legend>Notes</legend>
+  <div class="row" data-key="min_note_ms"><label>Shortest hold</label><input type="number" min="0" max="500">
+    <span class="hint">ms a key is held after its hammer lands <span class="default"></span></span></div>
+  <div class="row" data-key="restrike_gap_ms"><label>Release before a restrike</label><input type="number" min="0" max="500">
+    <span class="hint">ms a key is let go before it strikes again, when there's time <span class="default"></span></span></div>
+</fieldset>
+
+<fieldset>
+  <legend>Repeats</legend>
+  <p class="hint">How soon a key can strike again (ms between the notes sounding), by how loud the repeat is, after a
+    softer or a loud note. A repeat any sooner is merged into the note before. <span class="default" id="limits-default"></span></p>
+  <table class="limits">
+    <thead><tr><th>repeat velocity from</th><th>after a softer note</th><th>after a loud note</th><th></th></tr></thead>
+    <tbody id="limits"></tbody>
+  </table>
+  <button type="button" id="add-limit">Add a row</button>
+  <div class="row" data-key="repeat_loud_from"><label>A loud note is from</label><input type="number" min="1" max="127">
+    <span class="hint">velocity <span class="default"></span></span></div>
+  <div class="row wide" data-key="repeat_dead_zone" data-kind="list"><label>Dead zone</label><input class="wide" type="text">
+    <span class="hint">from velocity, to velocity, from ms, to ms: repeats this loud after a softer note also miss in
+      this interval <span class="default"></span></span></div>
+  <div class="row" data-key="repeat_window_ms"><label>Counts as a repeat within</label><input type="number" min="0" max="2000">
+    <span class="hint">ms of the last strike on its key <span class="default"></span></span></div>
+  <div class="row" data-key="repeat_late_ms"><label>Sent early by</label><input type="number" min="0" max="100">
+    <span class="hint">ms: a repeat's hammer lands about that much later <span class="default"></span></span></div>
+  <div class="row" data-key="repeat_clamp_offset_ms"><label>Repeat clamp starts</label><input type="number" min="-200" max="200">
+    <span class="hint">ms from the hammer landing (negative = before), in place of the key's own clamp <span class="default"></span></span></div>
+  <div class="row" data-key="repeat_clamp_ms"><label>Repeat clamp lasts</label><input type="number" min="0" max="1000">
+    <span class="hint">ms; 0 for no repeat clamp <span class="default"></span></span></div>
+  <div class="row" data-key="repeat_clamp_duty"><label>Repeat clamp duty</label><input type="number" min="0" max="100" step="0.25">
+    <span class="hint">% <span class="default"></span></span></div>
+</fieldset>
+
+<fieldset>
+  <legend>Sustain pedal</legend>
+  <div class="row" data-key="pedal_settle_ms"><label>Lifts the dampers in</label><input type="number" min="0" max="1000">
+    <span class="hint">ms after it's sent down <span class="default"></span></span></div>
+  <div class="row" data-key="pedal_min_ms"><label>Shortest between changes</label><input type="number" min="0" max="1000">
+    <span class="hint">ms <span class="default"></span></span></div>
+  <div class="row wide" data-key="pedal_press" data-kind="text"><label>Press command</label><input class="wide" type="text">
+    <span class="hint">duty:ms:duty:ms:hold, sent to both its solenoids <span class="default"></span></span></div>
+  <div class="row wide" data-key="pedal_release" data-kind="text"><label>Release command</label><input class="wide" type="text">
+    <span class="hint"><span class="default"></span></span></div>
+</fieldset>
+
+<div class="actions">
+  <button id="save">Save</button>
+  <button id="restore">Restore defaults</button>
+  <span id="message"></span>
+</div>
+<script src="/config/config.js"></script>
+</body>
+</html>

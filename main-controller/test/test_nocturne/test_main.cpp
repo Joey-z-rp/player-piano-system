@@ -14,11 +14,12 @@ static const size_t NOTE_OFFS = 1298;
 static const size_t SUSTAIN_MESSAGES = 268;
 static const size_t PEDAL_CHANGES = 228;
 static const uint32_t LAST_EVENT_MS = 240637;
-static const uint32_t RESTRIKES_UNDER_80_MS = 0; // its closest repeats are 100 ms and 119 ms apart
+// Repeats closer than this piano's measured limits (REPEAT_LIMITS in
+// src/app/piano/roll_builder.cpp), merged without landing times.
+static const uint32_t MERGED_REPEATS = 23;
 
 // The hardware limits the roll builder must respect.
 static const uint32_t MIN_NOTE_MS = 10;
-static const uint32_t RESTRIKE_GAP_MS = 70;
 static const uint32_t PEDAL_MIN_MS = 100;
 
 static std::vector<uint8_t> file;
@@ -95,7 +96,7 @@ void test_parser_reads_every_event()
 void test_roll_accounts_for_every_note()
 {
   TEST_ASSERT_EQUAL_UINT32(0, roll.skippedNotes);
-  TEST_ASSERT_EQUAL_UINT32(RESTRIKES_UNDER_80_MS, roll.mergedNotes);
+  TEST_ASSERT_EQUAL_UINT32(MERGED_REPEATS, roll.mergedNotes);
   TEST_ASSERT_EQUAL_UINT32(NOTE_ONS, roll.noteCount + roll.mergedNotes);
   TEST_ASSERT_UINT32_WITHIN(MIN_NOTE_MS, LAST_EVENT_MS, roll.durationMs);
 }
@@ -132,7 +133,7 @@ void test_every_key_is_released_and_rested_before_striking_again()
       if (struck[key])
       {
         snprintf(message, sizeof(message), "key %u re-struck at %u too soon", key, (unsigned)event.timeMs);
-        TEST_ASSERT_TRUE_MESSAGE(event.timeMs >= releasedAt[key] + RESTRIKE_GAP_MS, message);
+        TEST_ASSERT_TRUE_MESSAGE(event.timeMs > releasedAt[key], message);
       }
       TEST_ASSERT_TRUE(event.velocity >= 1 && event.velocity <= 127);
       down[key] = true;
@@ -194,7 +195,7 @@ void test_timed_roll_holds_each_key_until_its_hammer_lands()
       if (struck[key])
       {
         snprintf(message, sizeof(message), "key %u re-struck at %u too soon", key, (unsigned)event.timeMs);
-        TEST_ASSERT_TRUE_MESSAGE(event.timeMs >= releasedAt[key] + RESTRIKE_GAP_MS, message);
+        TEST_ASSERT_TRUE_MESSAGE(event.timeMs > releasedAt[key], message);
       }
       down[key] = struck[key] = true;
       pressedAt[key] = event.timeMs;

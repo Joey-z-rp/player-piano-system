@@ -166,7 +166,8 @@ void VelocityTable::formatDuty(char *text, size_t size, uint16_t duty)
   }
 }
 
-void VelocityTable::pressCommand(uint8_t key, uint8_t velocity, char *out, size_t size, bool pedal) const
+void VelocityTable::pressCommand(uint8_t key, uint8_t velocity, char *out, size_t size, bool pedal,
+                                 const ClampSettings *repeatClamp) const
 {
   uint16_t strikeDuty = duty(key, velocity, pedal);
   char strike[8];
@@ -181,16 +182,23 @@ void VelocityTable::pressCommand(uint8_t key, uint8_t velocity, char *out, size_
   char coast[8], hold[8];
   formatDuty(coast, sizeof(coast), coastDuty(key, pedal));
   formatDuty(hold, sizeof(hold), holdDuty(key, strikeDuty, pedal));
-  int32_t clampMs = setting(key, KeySetting::ClampMs, strikeDuty, pedal);
+  if (repeatClamp != nullptr && repeatClamp->ms == 0)
+  {
+    repeatClamp = nullptr; // none: a repeat plays like any note
+  }
+  int32_t clampMs = repeatClamp != nullptr ? repeatClamp->ms : setting(key, KeySetting::ClampMs, strikeDuty, pedal);
   if (clampMs > 0)
   {
-    int32_t clampAt = landing + setting(key, KeySetting::ClampOffsetMs, strikeDuty, pedal);
+    int32_t clampAt = landing + (repeatClamp != nullptr ? repeatClamp->offsetMs
+                                                        : setting(key, KeySetting::ClampOffsetMs, strikeDuty, pedal));
     if (clampAt < strikeMs)
     {
       clampAt = strikeMs;
     }
     char clamp[8];
-    formatDuty(clamp, sizeof(clamp), (uint16_t)setting(key, KeySetting::ClampDuty, strikeDuty, pedal));
+    formatDuty(clamp, sizeof(clamp), repeatClamp != nullptr
+                                         ? repeatClamp->duty
+                                         : (uint16_t)setting(key, KeySetting::ClampDuty, strikeDuty, pedal));
     snprintf(out, size, "P:%u:%s:%u:%s:%u:%s:%u:%s", key, strike, (unsigned)strikeMs, coast,
              (unsigned)(clampAt - strikeMs), clamp, (unsigned)clampMs, hold);
     return;

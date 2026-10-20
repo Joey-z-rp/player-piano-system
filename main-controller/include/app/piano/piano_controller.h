@@ -10,6 +10,7 @@
 #include <freertos/queue.h>
 #include <vector>
 #include "app/piano/piano_roll.h"
+#include "app/piano/play_config.h"
 
 class Rs485Module;
 class VelocityTable;
@@ -18,15 +19,12 @@ static const size_t DRIVER_COMMAND_MAX_LENGTH = 48; // e.g. "P:87:33.25:50:22.5:
 static const size_t DRIVER_COMMAND_QUEUE_LENGTH = 32;
 
 
-// The sustain pedal is pushed by two solenoids, driven together. Both use
-// P commands (duty:strike ms:follow-up duty:follow-up ms:hold duty):
-// press is 100% for 60 ms then hold 55%; release steps down 40% -> 30% -> 0%.
+// The sustain pedal is pushed by two solenoids, driven together, with the
+// press and release commands in the PlayConfig (P commands: duty:strike
+// ms:follow-up duty:follow-up ms:hold duty). Starting part way through with
+// the pedal down, it's pressed first and given PlayConfig::pedalSettleMs to
+// go down before the first note.
 static const uint8_t SUSTAIN_PEDAL_CHANNELS[] = {88, 89};
-static const char SUSTAIN_PEDAL_PRESS[] = "100:30:100:30:55";
-static const char SUSTAIN_PEDAL_RELEASE[] = "40:40:30:40:0";
-// Starting part way through with the pedal down, it's pressed first and
-// given this long to go down before the first note.
-static const uint32_t PEDAL_SETTLE_MS = 100;
 
 // Key presses are driven as the velocity table's DriveSettings say (see
 // sendPress). Without landing times, presses use the drivers' defaults (a
@@ -46,6 +44,7 @@ static const uint16_t MAX_CONTRAST = 250;
 static const uint16_t MIN_VOICING = 50;
 static const uint16_t MAX_VOICING = 300;
 static const int8_t MAX_PART_OFFSET = 20;
+static const uint8_t MAX_REPEAT_BOOST = 40; // velocities a repeat can be played louder (saved too)
 
 // Before each song, and on request, the driver boards are restarted and given
 // this long to come back, so a driver stuck in a bad state can't carry it
@@ -117,10 +116,18 @@ public:
   // Saved too. Return false if out of range.
   bool setContrast(uint16_t percent);
   bool setVoicing(uint16_t percent);
+  bool setRepeatBoost(uint8_t velocities);
   // For the loaded piece (see MidiEvent::part). Returns false if out of range.
   bool setPartOffset(uint8_t part, int8_t velocities);
   // Everything a piece is shaped by, as it is now: applies from the next Play.
   Dynamics dynamics() const;
+  // The timing rules pieces are played with (the config page), saved on the
+  // controller; they apply from the next Play. setPlayConfig reads JSON (see
+  // readPlayConfig) over the current settings.
+  PlayConfig playConfig() const;
+  uint32_t playConfigVersion() const; // changes whenever the config does
+  bool setPlayConfig(const char *json, size_t length, std::string &error);
+  void resetPlayConfig();
   // For building rolls timed to how this piano's hammers land.
   const VelocityTable *velocities() const;
 
@@ -159,9 +166,10 @@ private:
   void sendRollEvent(const RollEvent &event);
   void releaseAll();
   void restartDrivers();
-  void sendPedal(const char *params);
+  void sendPedal(bool down);
+  void saveConfig(const PlayConfig &config);
   bool send(const char *command);
-  void sendPress(uint8_t key, uint8_t velocity, bool pedal);
+  void sendPress(uint8_t key, uint8_t velocity, bool pedal, bool repeat);
 
   Rs485Module *rs485;
   const VelocityTable *velocityTable;
@@ -173,7 +181,11 @@ private:
   std::atomic<uint16_t> volumePercent;
   std::atomic<uint16_t> contrastPercent;
   std::atomic<uint16_t> voicingPercent;
+  std::atomic<uint8_t> repeatBoost;
   std::atomic<int8_t> partOffsets[MAX_MIDI_PARTS];
+  mutable std::mutex configMutex;
+  PlayConfig config;
+  std::atomic<uint32_t> configVersion;
   std::atomic<uint32_t> playStartMs;
   std::atomic<uint32_t> pausedAtMs;
 
@@ -184,6 +196,7 @@ private:
   std::bitset<PIANO_KEY_COUNT> skipReleases; // see RollStart
   std::vector<size_t> skippedPresses;
   size_t nextSkipped;
+  PlayConfig playingConfig; // the config the playing roll was built with
 };
 
 #endif // PIANO_CONTROLLER_H

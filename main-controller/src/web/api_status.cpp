@@ -15,6 +15,7 @@ void registerStatusRoutes(AsyncWebServer &server, PianoController &piano)
     Dynamics dynamics = piano.dynamics();
     doc["contrast"] = dynamics.contrast;
     doc["voicing"] = dynamics.voicing;
+    doc["repeatBoost"] = dynamics.repeatBoost;
 
     PlaybackStatus playback = piano.status();
     JsonObject playbackJson = doc["playback"].to<JsonObject>();

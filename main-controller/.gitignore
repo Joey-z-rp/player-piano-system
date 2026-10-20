@@ -7,4 +7,5 @@
 # Calibration recordings: large, kept locally (see tools/calibrate_dynamics.py)
 calibration/recordings/
 calibration/recordings_pedal/
+calibration/repeat_recordings/
 calibration/envelopes/
