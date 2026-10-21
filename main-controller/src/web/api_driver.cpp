@@ -272,6 +272,7 @@ void registerDriverRoutes(AsyncWebServer &server, PianoController &piano)
           sendError(request, result == PlaybackResult::QueueFull ? 503 : 409,
                     result == PlaybackResult::Busy     ? "a piece is playing or paused"
                     : result == PlaybackResult::TooHot ? "a solenoid is still cooling"
+                    : result == PlaybackResult::Updating ? "the controller is being updated"
                                                        : "command queue full");
           return;
         }

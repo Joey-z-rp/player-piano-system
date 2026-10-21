@@ -4,10 +4,13 @@
 #include "app/library/piece_library.h"
 #include "app/piano/piano_controller.h"
 #include "app/piano/velocity_table.h"
+#include "firmware_info.h"
 #include "led_control.h"
+#include "ota_updates.h"
 #include "rs485.h"
 #include "serial_commands.h"
 #include "wifi_station.h"
+#include "web/api_system.h"
 #include "web/web_server.h"
 
 LedControl ledControl;
@@ -18,6 +21,8 @@ PieceLibrary library;
 SerialCommands serialCommands;
 WiFiStationModule wifiStation;
 WebServerModule webServer;
+OtaUpdates ota;
+static bool online = false; // on Wi-Fi with the web server up: the firmware is kept
 
 static const char VELOCITY_TABLE_PATH[] = "/velocity_table.json";
 
@@ -56,7 +61,10 @@ void setup()
   {
     delay(10);
   }
-  Serial.println("Starting ESP32 Piano Controller...");
+  Serial.printf("Starting the piano controller: firmware %s, built %s, from %s%s\n", firmwareVersion(),
+                firmwareBuilt(), firmwareSlot(),
+                firmwareOnTrial() ? " (an update, on trial)" : firmwareRolledBack() ? " (an update was rolled back)"
+                                                                                    : "");
 
   Serial.println("Initializing LED control...");
   if (!ledControl.init())
@@ -79,32 +87,41 @@ void setup()
     Serial.println("Failed to initialize piano controller");
     return;
   }
-  serialCommands.begin(&piano);
+  serialCommands.begin(&piano, &wifiStation);
   library.begin();
 
-  Serial.println("Initializing WiFi Station...");
-  if (!wifiStation.init())
-  {
-    Serial.println("WiFi failed. Set credentials in wifi_station.cpp");
-    return;
-  }
+  // Joins the saved network, or starts the setup network (see WiFiStationModule).
+  wifiStation.begin();
 
   // The clock, for when pieces were added and played (UTC; the page shows local time).
   configTime(0, 0, "pool.ntp.org", "time.google.com");
 
-  if (!webServer.begin(piano, library))
+  if (!webServer.begin(piano, library, wifiStation, ota))
   {
     Serial.println("Failed to start web server");
     return;
   }
-  ledControl.set(CRGB::Green);
-  Serial.printf("Open http://%s/\n", wifiStation.getIPAddress().toString().c_str());
+  ota.begin(piano);
+  ledControl.set(wifiStation.inSetup() ? CRGB::Blue : CRGB::Green);
+  Serial.printf("Open http://%s/ (or http://%s.local/)\n", wifiStation.getIPAddress().toString().c_str(),
+                WiFiStationModule::HOSTNAME);
 }
 
-// Playback and RS485 run on the piano controller's own task; the loop only
-// reads commands from the USB serial port.
+// Playback and RS485 run on the piano controller's own task; the loop reads
+// commands from the USB serial port, looks after the Wi-Fi (the setup
+// network) and updates over it, and keeps or rolls back an update.
 void loop()
 {
   serialCommands.poll();
+  wifiStation.poll();
+  ota.poll();
+  restartIfAsked();
+  if (!online && wifiStation.isConnected() && !wifiStation.inSetup())
+  {
+    online = true;
+    firmwareIsGood(); // an update that gets this far is kept
+    ledControl.set(CRGB::Green);
+  }
+  checkFirmwareTrial();
   delay(1);
 }

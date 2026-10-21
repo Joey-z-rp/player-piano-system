@@ -1,16 +1,17 @@
 #include "web/api_status.h"
 #include "web/api_response.h"
+#include "web/api_system.h"
 #include "app/piano/piano_controller.h"
 #include <WiFi.h>
 #include <math.h>
 
-void registerStatusRoutes(AsyncWebServer &server, PianoController &piano)
+void registerStatusRoutes(AsyncWebServer &server, PianoController &piano, WiFiStationModule &wifi, OtaUpdates &ota)
 {
-  server.on("/api/status", HTTP_GET, [&piano](AsyncWebServerRequest *request) {
+  server.on("/api/status", HTTP_GET, [&piano, &wifi, &ota](AsyncWebServerRequest *request) {
     JsonDocument doc;
+    writeSystem(doc.to<JsonObject>(), wifi, ota); // firmware, update, wifi
     doc["uptimeMs"] = millis();
     doc["freeHeap"] = ESP.getFreeHeap();
-    doc["rssi"] = WiFi.RSSI();
     doc["pendingCommands"] = piano.pendingCommands();
     doc["volume"] = piano.volume();
     Dynamics dynamics = piano.dynamics();

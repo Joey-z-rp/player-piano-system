@@ -6,15 +6,21 @@
 const noteView = (() => {
   const MERGED = 1, ABSORBED = 2, SHORTENED = 4, LENGTHENED = 8, LIMITED = 16, DUPLICATE = 32, BOOSTED = 64,
     MUTED = 128;
+  // The kinds of change to step through: each a test of a note. A note
+  // merged at the same moment as the strike it's in is doubled (two voices on
+  // one key at different velocities), not a repeat too soon to strike again.
+  const doubled = (n) => (n.changes & MERGED) && n.mergedInto === n.on;
   const KINDS = [
-    { flag: MERGED, label: "merged" },
-    { flag: SHORTENED, label: "shortened" },
-    { flag: LENGTHENED, label: "lengthened" },
-    { flag: LIMITED, label: "velocity limited" },
-    { flag: DUPLICATE, label: "duplicates" },
-    { flag: BOOSTED, label: "repeats boosted" },
-    { flag: MUTED, label: "muted" }
+    { id: "merged", label: "merged repeats", test: (n) => (n.changes & MERGED) && !doubled(n) },
+    { id: "doubled", label: "doubled", test: doubled },
+    { id: "shortened", label: "shortened", test: (n) => n.changes & SHORTENED },
+    { id: "lengthened", label: "lengthened", test: (n) => n.changes & LENGTHENED },
+    { id: "limited", label: "velocity limited", test: (n) => n.changes & LIMITED },
+    { id: "duplicates", label: "duplicates", test: (n) => n.changes & DUPLICATE },
+    { id: "boosted", label: "repeats boosted", test: (n) => n.changes & BOOSTED },
+    { id: "muted", label: "muted", test: (n) => n.changes & MUTED }
   ];
+  const kindTest = () => (KINDS.find((k) => k.id === kindSelect.value) || KINDS[0]).test;
   // Velocity 1 to 127, light to dark, for played notes and changed ones.
   const RAMPS = {
     played: rampOf([[1, "#dce9fb"], [32, "#93bdf2"], [64, "#3d86dc"], [96, "#1b4f9c"], [127, "#0b2552"]]),
@@ -302,8 +308,7 @@ const noteView = (() => {
 
   // ---- stepping through changes ----
   function kindNotes() {
-    const flag = Number(kindSelect.value);
-    return notes.filter((note) => note.changes & flag);
+    return notes.filter(kindTest());
   }
 
   function showSelected() {
@@ -340,8 +345,8 @@ const noteView = (() => {
     const chosen = kindSelect.value;
     kindSelect.replaceChildren(...KINDS.map((kind) => {
       const option = document.createElement("option");
-      option.value = kind.flag;
-      option.textContent = `${kind.label} (${notes.filter((n) => n.changes & kind.flag).length})`;
+      option.value = kind.id;
+      option.textContent = `${kind.label} (${notes.filter(kind.test).length})`;
       return option;
     }));
     if (chosen) kindSelect.value = chosen;
@@ -463,7 +468,7 @@ const noteView = (() => {
       highKey = Math.min(87, Math.max(...keys) + 1);
       const wasSelected = selected;
       selected = wasSelected ? notes.find((n) => n.key === wasSelected.key && n.on === wasSelected.on) || null : null;
-      if (selected && !(selected.changes & Number(kindSelect.value))) selected = null;
+      if (selected && !kindTest()(selected)) selected = null;
       fillKinds();
       showSelected();
       redraw();

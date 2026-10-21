@@ -6,6 +6,9 @@
 class PianoController;
 
 // GET /api/status
-void registerStatusRoutes(AsyncWebServer &server, PianoController &piano);
+class OtaUpdates;
+class WiFiStationModule;
+
+void registerStatusRoutes(AsyncWebServer &server, PianoController &piano, WiFiStationModule &wifi, OtaUpdates &ota);
 
 #endif // API_STATUS_H

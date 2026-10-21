@@ -34,8 +34,13 @@
   .dyn-note { margin: 0 0 6px; }
   .heat { font-size: 13px; color: #5f5e5a; margin: -8px 0 12px; }
   .heat[hidden] { display: none; }
-  .heat.warm { color: #8a4b00; }
-  .heat.hot { color: #b3261e; font-weight: 600; font-size: 14px; }
+  /* Warm or hot: floats at the top until Play is allowed again. */
+  .heat-alert { position: fixed; left: 50%; top: 12px; transform: translateX(-50%); z-index: 10; margin: 0;
+    max-width: min(36rem, calc(100vw - 32px)); box-sizing: border-box; padding: 10px 16px; border-radius: 8px;
+    font-size: 14px; box-shadow: 0 4px 16px rgba(0, 0, 0, .2); background: #fff4e0; color: #6b3a00;
+    border: 1px solid #f0c27a; }
+  .heat-alert.hot { background: #b3261e; color: #fff; border-color: #b3261e; }
+  .heat-alert[hidden] { display: none; }
   .library { margin: 8px 0 16px; max-width: 48rem; }
   .library-head { display: flex; align-items: baseline; gap: 12px; }
   .library h2 { font-size: 18px; margin: 0; }
@@ -128,6 +133,8 @@
   <div class="now-meta"><span id="piece-meta"></span> <span class="busy" id="busy" hidden></span></div>
 </div>
 <p class="heat" id="heat" hidden></p>
+<p class="heat-alert" id="heat-alert" role="status" hidden></p>
+<p class="heat-alert" id="update-alert" role="status" hidden></p>
 <p>
   <button id="play" disabled>Play</button>
   <button id="pause" disabled>Pause</button>

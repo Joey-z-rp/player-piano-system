@@ -11,7 +11,7 @@ static const BaseType_t PLAYER_TASK_CORE = 1;      // Wi-Fi runs on core 0
 
 PianoController::PianoController()
     : rs485(nullptr), velocityTable(nullptr), messageQueue(nullptr), state(PlaybackState::Idle),
-      volumePercent(DEFAULT_VOLUME), contrastPercent(100), voicingPercent(100), repeatBoost(0), partOffsets(), speedPercent(100), mutedParts(0), rebuilding(false), testing(false), configVersion(1), playStartMs(0),
+      volumePercent(DEFAULT_VOLUME), contrastPercent(100), voicingPercent(100), repeatBoost(0), partOffsets(), speedPercent(100), mutedParts(0), rebuilding(false), testing(false), updating(false), configVersion(1), playStartMs(0),
       pausedAtMs(0),
       nextEvent(0), startUs(0), nextSkipped(0)
 {
@@ -84,6 +84,10 @@ PlaybackResult PianoController::play(uint32_t fromMs, uint16_t atSpeed)
   {
     return PlaybackResult::TooHot;
   }
+  if (updating)
+  {
+    return PlaybackResult::Updating;
+  }
 
   Message message;
   message.type = MessageType::Play;
@@ -103,6 +107,10 @@ PlaybackResult PianoController::playTest(std::shared_ptr<const PianoRoll> roll)
   {
     return PlaybackResult::TooHot;
   }
+  if (updating)
+  {
+    return PlaybackResult::Updating;
+  }
   {
     std::lock_guard<std::mutex> lock(rollMutex);
     testRoll = roll;
@@ -111,6 +119,23 @@ PlaybackResult PianoController::playTest(std::shared_ptr<const PianoRoll> roll)
   message.type = MessageType::PlayTest;
   message.text[0] = '\0';
   return post(message) ? PlaybackResult::Ok : PlaybackResult::QueueFull;
+}
+
+void PianoController::beginUpdate()
+{
+  updating = true;
+  stop();
+  // The player task does the stop: give it a moment, as the update's writes
+  // to flash hold everything up.
+  for (int i = 0; i < 20 && state != PlaybackState::Idle; i++)
+  {
+    delay(10);
+  }
+}
+
+void PianoController::endUpdate()
+{
+  updating = false;
 }
 
 PlaybackResult PianoController::pause()

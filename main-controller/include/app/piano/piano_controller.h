@@ -77,7 +77,8 @@ enum class PlaybackResult
   NoRoll,
   NotPlaying,
   QueueFull,
-  TooHot // a solenoid is still cooling (see heatStatus)
+  TooHot,  // a solenoid is still cooling (see heatStatus)
+  Updating // an update over Wi-Fi is under way
 };
 
 enum class PlaybackState : uint8_t
@@ -125,6 +126,11 @@ public:
   // still playing; Busy while the piece is playing or paused. Pause and seek
   // don't apply to it; stop does.
   PlaybackResult playTest(std::shared_ptr<const PianoRoll> roll);
+  // An update over Wi-Fi: stops anything playing (every key and the pedal let
+  // go) and holds off Play and tests until it ends (endUpdate, if it fails;
+  // else the controller restarts).
+  void beginUpdate();
+  void endUpdate();
   // Stops any song and restarts every driver board, which lets every key go.
   PlaybackResult resetDrivers();
   // Presses or gradually releases the sustain pedal, as a song does.
@@ -253,6 +259,7 @@ private:
   std::shared_ptr<const PianoRoll> loadedRoll;
   std::shared_ptr<const PianoRoll> testRoll; // waiting to be played (playTest)
   std::atomic<bool> testing;
+  std::atomic<bool> updating;
   std::atomic<PlaybackState> state;
   std::atomic<uint16_t> volumePercent;
   std::atomic<uint16_t> contrastPercent;

@@ -9,3 +9,7 @@ calibration/recordings/
 calibration/recordings_pedal/
 calibration/repeat_recordings/
 calibration/envelopes/
+
+# Secrets and generated files
+secrets.ini
+include/firmware_version.h

@@ -34,6 +34,9 @@ static void sendPlaybackResult(AsyncWebServerRequest *request, PlaybackResult re
   case PlaybackResult::TooHot:
     sendError(request, 409, "a solenoid is still cooling: see /api/status's heat");
     return;
+  case PlaybackResult::Updating:
+    sendError(request, 409, "the controller is being updated");
+    return;
   }
 }
 

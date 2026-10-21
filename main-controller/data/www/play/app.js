@@ -364,27 +364,32 @@ resetButton.addEventListener("click", () => {
   dynamicsChanged();
 });
 
-// The solenoids' heat, when the controller watches it (their coils measured).
+// The solenoids' heat, when the controller watches it (their coils measured):
+// a line under the piece's name, or while one is warm or hot (Play waits for
+// it to cool), a banner at the top that stays until it has.
 const heatLine = document.getElementById("heat");
+const heatAlert = document.getElementById("heat-alert");
 function showHeat(heat) {
-  heatLine.hidden = !heat || !heat.watched;
-  if (heatLine.hidden) return;
+  const watched = Boolean(heat && heat.watched);
+  const cooling = watched && heat.load >= heat.resumeLoad;
+  heatLine.hidden = !watched || cooling;
+  heatAlert.hidden = !cooling;
+  if (!watched) return;
   const name = (channel) => (channel >= 88 ? "the pedal solenoids" : `${noteName(channel + 21)}'s solenoid`);
   const minutes = (s) => (s < 60 ? "under a minute" : `about ${Math.ceil(s / 60)} min`);
   const degrees = (c) => `${c.toFixed(0)} °C`;
-  const cooling = heat.load >= heat.resumeLoad;
   const stopped = { paused: "Paused", testStopped: "Test stopped", released: "Let go" }[heat.action];
-  heatLine.className = "heat" + (stopped && cooling ? " hot" : cooling ? " warm" : "");
-  if (stopped && cooling) {
-    heatLine.textContent = `${stopped}: ${name(heat.actionChannel)} reached the heat limit. ` +
-      `Play can go on once ${heat.actionChannel >= 88 ? "they've" : "it's"} cooled, in ${minutes(heat.coolS)}.`;
-  } else if (cooling) {
-    heatLine.textContent = `Warm: ${name(heat.channel)} at ${degrees(heat.riseC)} of the ${degrees(heat.limitC)} ` +
-      `allowed. Play waits until under ${degrees(heat.limitC * heat.resumeLoad)}.`;
-  } else {
+  if (!cooling) {
     heatLine.textContent = `Solenoid heat: warmest is ${name(heat.channel)}, ${degrees(heat.riseC)} of ` +
       `${degrees(heat.limitC)} allowed`;
+    return;
   }
+  heatAlert.classList.toggle("hot", Boolean(stopped));
+  heatAlert.textContent = stopped
+    ? `${stopped}: ${name(heat.actionChannel)} reached the heat limit. Play can go on once ` +
+      `${heat.actionChannel >= 88 ? "they've" : "it's"} cooled, in ${minutes(heat.coolS)}.`
+    : `Warm: ${name(heat.channel)} at ${degrees(heat.riseC)} of the ${degrees(heat.limitC)} allowed. ` +
+      `Play waits until under ${degrees(heat.limitC * heat.resumeLoad)}, in ${minutes(heat.coolS)}.`;
 }
 
 async function refresh() {
@@ -399,6 +404,12 @@ async function refresh() {
   }
   const playback = status.playback;
   showHeat(status.heat);
+  // An update over Wi-Fi: Play waits, and the controller restarts after it.
+  const update = status.update || { kind: "none" };
+  const updateAlert = document.getElementById("update-alert");
+  updateAlert.hidden = update.kind === "none";
+  updateAlert.textContent = `Updating the ${update.kind === "firmware" ? "firmware" : "web pages"} over Wi-Fi: ` +
+    `${update.percent}%. The controller restarts when it's done.`;
   controllerBuilding = Boolean(playback.building);
   showBusy();
   const wasActive = playing || paused;

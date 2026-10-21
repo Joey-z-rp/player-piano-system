@@ -5,6 +5,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Player piano</title>
 <link rel="stylesheet" href="/assets/style.css">
+<style>
+  .system { color: #5f5e5a; font-size: 13px; margin-top: 24px; line-height: 1.6; }
+  .warn { color: #b3261e; font-size: 14px; }
+</style>
 </head>
 <body>
 <h1>Player piano</h1>
@@ -12,7 +16,26 @@
   <li><a href="/play">Play a piece</a></li>
   <li><a href="/test">Driver test</a></li>
   <li><a href="/config">Config</a></li>
+  <li><a href="/wifi">Wi-Fi</a></li>
   <li><a href="/backup">Backup</a></li>
 </ul>
+<p class="warn" id="warning" hidden></p>
+<p class="system" id="system"></p>
+<script>
+  // The firmware running, and whether an update was rolled back.
+  fetch("/api/system").then((r) => r.json()).then(({ firmware, wifi }) => {
+    document.getElementById("system").textContent =
+      `Firmware ${firmware.version}, built ${firmware.built} (${firmware.slot})` +
+      ` · ${wifi.setup ? "own network" : "on"} “${wifi.network}” at ${wifi.ip}`;
+    const warning = document.getElementById("warning");
+    if (firmware.rolledBack) {
+      warning.textContent = "The last firmware update didn't get online, so the controller went back to this one.";
+      warning.hidden = false;
+    } else if (firmware.onTrial) {
+      warning.textContent = "Running a new firmware update: it's kept once it's online.";
+      warning.hidden = false;
+    }
+  }).catch(() => {});
+</script>
 </body>
 </html>

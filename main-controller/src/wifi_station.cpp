@@ -1,133 +1,235 @@
 #include "wifi_station.h"
+#include <ESPmDNS.h>
+#include <Preferences.h>
 
-// Default WiFi credentials - CHANGE THESE TO YOUR NETWORK
-const char *WiFiStationModule::DEFAULT_SSID = "YOUR_WIFI_SSID";
-const char *WiFiStationModule::DEFAULT_PASSWORD = "YOUR_WIFI_PASSWORD";
-const unsigned long WiFiStationModule::CONNECTION_TIMEOUT = 20000; // 20 seconds
+static const uint32_t JOIN_TIMEOUT_MS = 20000;
+static const uint32_t RETRY_MS = 120000; // in setup, how often the saved network is tried again
+static const char NAMESPACE[] = "wifi";
+static const char PARTITION[] = "settings"; // the controller's settings (partitions.csv)
 
-WiFiStationModule::WiFiStationModule() : connected(false)
+#ifdef WIFI_SSID
+static const char FALLBACK_SSID[] = WIFI_SSID; // from secrets.ini
+#else
+static const char FALLBACK_SSID[] = "";
+#endif
+#ifdef WIFI_PASSWORD
+static const char FALLBACK_PASSWORD[] = WIFI_PASSWORD;
+#else
+static const char FALLBACK_PASSWORD[] = "";
+#endif
+
+WiFiStationModule::WiFiStationModule() : setup(false), tryNow(false), lastTryMs(0)
 {
-  wifiSSID = DEFAULT_SSID;
-  wifiPassword = DEFAULT_PASSWORD;
 }
 
-WiFiStationModule::~WiFiStationModule()
+// Answers for piano.local on the network (multicast DNS), and says there are
+// web pages here. Started once; it follows the controller onto networks it
+// joins later.
+static void startNameService()
 {
-  disconnect();
-}
-
-bool WiFiStationModule::init()
-{
-  return init(DEFAULT_SSID, DEFAULT_PASSWORD);
-}
-
-bool WiFiStationModule::init(const char *ssid, const char *password)
-{
-  if (connected)
+  static bool started = false;
+  if (!started && MDNS.begin(WiFiStationModule::HOSTNAME))
   {
-    Serial.println("WiFi already connected!");
-    return true;
+    MDNS.addService("http", "tcp", 80);
+    started = true;
   }
+}
 
-  // Set credentials
-  setCredentials(ssid, password);
+bool WiFiStationModule::loadSaved(String &ssid, String &password) const
+{
+  Preferences saved;
+  if (!saved.begin(NAMESPACE, true, PARTITION))
+  {
+    return false;
+  }
+  ssid = saved.getString("ssid", "");
+  password = saved.getString("password", "");
+  saved.end();
+  return ssid.length() > 0;
+}
 
-  // Disable WiFi mode first
-  WiFi.mode(WIFI_OFF);
-  delay(100);
+bool WiFiStationModule::hasSaved() const
+{
+  String ssid, password;
+  return loadSaved(ssid, password);
+}
 
-  // Set WiFi mode to station
-  WiFi.mode(WIFI_STA);
-  delay(100);
+bool WiFiStationModule::hasFallback() const
+{
+  return FALLBACK_SSID[0] != '\0';
+}
 
-  WiFi.setSleep(false);
+String WiFiStationModule::networkToJoin() const
+{
+  String ssid, password;
+  return loadSaved(ssid, password) ? ssid : String(FALLBACK_SSID);
+}
 
-  // Begin WiFi connection
-  WiFi.begin(wifiSSID.c_str(), wifiPassword.c_str());
+bool WiFiStationModule::saveNetwork(const String &ssid, const String &password)
+{
+  if (ssid.length() == 0 || ssid.length() > 32 || password.length() > 63)
+  {
+    return false;
+  }
+  Preferences saved;
+  if (!saved.begin(NAMESPACE, false, PARTITION))
+  {
+    return false;
+  }
+  saved.putString("ssid", ssid);
+  saved.putString("password", password);
+  saved.end();
+  return true;
+}
 
-  Serial.printf("Connecting to WiFi: %s", wifiSSID.c_str());
+void WiFiStationModule::forgetNetwork()
+{
+  Preferences saved;
+  if (saved.begin(NAMESPACE, false, PARTITION))
+  {
+    saved.clear();
+    saved.end();
+  }
+  tryNow = setup; // poll() tries the next one at once
+}
 
-  // Wait for connection with timeout
-  unsigned long startTime = millis();
-  while (WiFi.status() != WL_CONNECTED && (millis() - startTime) < CONNECTION_TIMEOUT)
+bool WiFiStationModule::join(const String &ssid, const String &password, uint32_t timeoutMs)
+{
+  WiFi.begin(ssid.c_str(), password.c_str());
+  Serial.printf("Connecting to Wi-Fi: %s", ssid.c_str());
+  uint32_t start = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - start < timeoutMs)
   {
     delay(500);
     Serial.print(".");
   }
+  Serial.println();
+  return WiFi.status() == WL_CONNECTED;
+}
 
+void WiFiStationModule::begin()
+{
+  WiFi.persistent(false); // the network is kept here, not by the Wi-Fi library
+  WiFi.mode(WIFI_STA);
+  WiFi.setHostname(HOSTNAME);
+  WiFi.setSleep(false);
+  WiFi.setAutoReconnect(true);
+  String ssid, password;
+  if (!loadSaved(ssid, password))
+  {
+    ssid = FALLBACK_SSID;
+    password = FALLBACK_PASSWORD;
+  }
+  if (ssid.length() > 0 && join(ssid, password, JOIN_TIMEOUT_MS))
+  {
+    Serial.printf("Wi-Fi: %s, %s (%d dBm)\n", WiFi.SSID().c_str(), WiFi.localIP().toString().c_str(), WiFi.RSSI());
+    startNameService();
+    return;
+  }
+  Serial.println(ssid.length() > 0 ? "Wi-Fi: couldn't join it" : "Wi-Fi: no network saved");
+  startSetup();
+}
+
+void WiFiStationModule::startSetup()
+{
+  setup = true;
+  lastTryMs = millis();
+  WiFi.mode(WIFI_AP_STA); // the station side scans, and keeps trying the saved network
+  WiFi.softAP(SETUP_NETWORK);
+  dns.start(53, "*", WiFi.softAPIP()); // every name leads here, so phones open the setup page
+  Serial.printf("Wi-Fi: started \"%s\": join it and open http://%s/wifi/\n", SETUP_NETWORK,
+                WiFi.softAPIP().toString().c_str());
+  startNameService();
+}
+
+void WiFiStationModule::poll()
+{
+  if (!setup)
+  {
+    return;
+  }
+  dns.processNextRequest();
   if (WiFi.status() == WL_CONNECTED)
   {
-    connected = true;
-    Serial.println();
-    Serial.println("WiFi connected successfully!");
-    Serial.printf("SSID: %s\n", WiFi.SSID().c_str());
-    Serial.printf("IP Address: %s\n", WiFi.localIP().toString().c_str());
-    Serial.printf("Signal Strength: %d dBm\n", WiFi.RSSI());
-    Serial.printf("MAC Address: %s\n", WiFi.macAddress().c_str());
-    return true;
+    // The saved network came back: no more setup network.
+    dns.stop();
+    WiFi.softAPdisconnect(true);
+    WiFi.mode(WIFI_STA);
+    setup = false;
+    Serial.printf("Wi-Fi: joined %s, %s\n", WiFi.SSID().c_str(), WiFi.localIP().toString().c_str());
+    return;
   }
-  else
+  String ssid = networkToJoin();
+  // Every RETRY_MS, but not while a phone is on the setup network (trying
+  // makes it drop for a moment), unless it's just been asked for.
+  if (ssid.length() > 0 && (tryNow || (millis() - lastTryMs > RETRY_MS && WiFi.softAPgetStationNum() == 0)))
   {
-    connected = false;
-    Serial.println();
-    Serial.println("WiFi connection failed!");
-    Serial.println("Please check your credentials and network availability.");
-    return false;
+    lastTryMs = millis();
+    tryNow = false;
+    String saved, password;
+    if (!loadSaved(saved, password))
+    {
+      password = FALLBACK_PASSWORD;
+    }
+    WiFi.begin(ssid.c_str(), password.c_str()); // in the background; checked above
   }
+}
+
+bool WiFiStationModule::inSetup() const
+{
+  return setup;
 }
 
 bool WiFiStationModule::isConnected() const
 {
-  return connected && (WiFi.status() == WL_CONNECTED);
+  return WiFi.status() == WL_CONNECTED;
 }
 
 IPAddress WiFiStationModule::getIPAddress() const
 {
-  if (isConnected())
-  {
-    return WiFi.localIP();
-  }
-  return IPAddress(0, 0, 0, 0);
+  return setup ? WiFi.softAPIP() : WiFi.localIP();
 }
 
 int WiFiStationModule::getRSSI() const
 {
-  if (isConnected())
-  {
-    return WiFi.RSSI();
-  }
-  return 0;
+  return isConnected() ? WiFi.RSSI() : 0;
 }
 
 String WiFiStationModule::getSSID() const
 {
-  if (isConnected())
-  {
-    return WiFi.SSID();
-  }
-  return "";
+  return setup ? String(SETUP_NETWORK) : WiFi.SSID();
 }
 
-void WiFiStationModule::disconnect()
+bool WiFiStationModule::scan(std::vector<Network> &networks)
 {
-  if (connected)
+  int16_t found = WiFi.scanComplete();
+  if (found == WIFI_SCAN_RUNNING)
   {
-    WiFi.disconnect();
-    WiFi.mode(WIFI_OFF);
-    connected = false;
-    Serial.println("WiFi disconnected");
+    return false;
   }
-}
-
-void WiFiStationModule::setCredentials(const char *ssid, const char *password)
-{
-  if (ssid != nullptr)
+  if (found < 0)
   {
-    wifiSSID = String(ssid);
+    WiFi.scanNetworks(true); // in the background
+    return false;
   }
-
-  if (password != nullptr)
+  networks.clear();
+  for (int16_t i = 0; i < found; i++)
   {
-    wifiPassword = String(password);
+    String ssid = WiFi.SSID(i);
+    bool seen = false;
+    for (Network &n : networks)
+    {
+      if (n.ssid == ssid)
+      {
+        n.rssi = max(n.rssi, (int)WiFi.RSSI(i)); // the strongest of its access points
+        seen = true;
+      }
+    }
+    if (!seen && ssid.length() > 0)
+    {
+      networks.push_back({ssid, WiFi.RSSI(i), WiFi.encryptionType(i) != WIFI_AUTH_OPEN});
+    }
   }
+  WiFi.scanDelete(); // the next asks for a fresh scan
+  return true;
 }
