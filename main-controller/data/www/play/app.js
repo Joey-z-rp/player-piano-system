@@ -1,3 +1,7 @@
+// The play page: loading and playing a piece, the dynamics sliders and
+// tracks, and keeping it all in step with the controller (refresh). The note
+// view, velocity chart and library are in notes.js, velocities.js and
+// library.js.
 const fileInput = document.getElementById("file");
 const piece = document.getElementById("piece");
 const playButton = document.getElementById("play");
@@ -6,6 +10,21 @@ const stopButton = document.getElementById("stop");
 const progress = document.getElementById("progress");
 const time = document.getElementById("time");
 const message = document.getElementById("message");
+const busy = document.getElementById("busy");
+const pieceMeta = document.getElementById("piece-meta");
+
+// A message floats at the bottom for a while (an error a little longer), or
+// until it's clicked.
+let messageTimer;
+new MutationObserver(() => {
+  clearTimeout(messageTimer);
+  if (message.textContent) {
+    messageTimer = setTimeout(() => (message.textContent = ""), message.classList.contains("error") ? 12000 : 7000);
+  }
+}).observe(message, { childList: true, characterData: true, subtree: true });
+message.addEventListener("click", () => (message.textContent = ""));
+const notesBusy = document.getElementById("notes-busy");
+const notesSection = document.getElementById("notes");
 const volume = document.getElementById("volume");
 const volumeValue = document.getElementById("volume-value");
 const volumeNote = document.getElementById("volume-note");
@@ -13,6 +32,8 @@ const contrast = document.getElementById("contrast");
 const contrastValue = document.getElementById("contrast-value");
 const voicing = document.getElementById("voicing");
 const voicingValue = document.getElementById("voicing-value");
+const speed = document.getElementById("speed");
+const speedValue = document.getElementById("speed-value");
 const repeatBoost = document.getElementById("repeat-boost");
 const repeatBoostValue = document.getElementById("repeat-boost-value");
 const repeatNote = document.getElementById("repeat-note");
@@ -26,18 +47,48 @@ let seeking = false; // while dragging, don't let refresh() move the bar
 let playing = false;
 let paused = false; // every key up; Play goes on from there
 let durationMs = 0;
+// What's being built: by the controller (status "building"), for an upload,
+// or the note view's notes. One indicator shows the first that applies.
+let controllerBuilding = false;
+let libraryBusy = false; // playing or paused: no loading another piece
+let uploading = false;
+let notesLoading = false;
+// Over the note view when it's showing, else beside the piece's name.
+function showBusy() {
+  const text = uploading ? "Uploading and building the piece…"
+    : controllerBuilding ? "Building the piece with the new settings…"
+    : notesLoading ? "Updating the notes…" : "";
+  const onNotes = !notesSection.hidden;
+  notesBusy.firstElementChild.textContent = text;
+  notesBusy.hidden = !text || !onNotes;
+  busy.textContent = text;
+  busy.hidden = !text || onNotes;
+  showButtons();
+}
 
-// ---- the piece's velocities, as written and with the dynamics settings ----
-const velocitySection = document.getElementById("velocities");
-const velocityChart = document.getElementById("velocity-chart");
-const velocityLow = document.getElementById("velocity-low");
-let pieceNotes = null; // [{on, velocity, part}] as written, from the note view
+// Play waits while the piece is being built or the settings are on their way.
+let hasPiece = false;
+function showButtons() {
+  fileInput.disabled = playing || paused || uploading;
+  playButton.disabled = playing || !hasPiece || controllerBuilding || notesLoading || uploading || dynamicsChanging;
+  playButton.textContent = paused ? "Resume" : "Play";
+  pauseButton.disabled = !playing;
+  stopButton.disabled = !playing && !paused;
+}
+noteView.onLoading((loading) => {
+  notesLoading = loading;
+  showBusy();
+});
+
+// The speed the loaded piece is built at, which its times (the bar, startFrom)
+// are in, and its lead (times before it don't scale): from /api/status.
+let pieceSpeed = 100;
+let pieceLead = 0;
+
 let partInfo = []; // the piece's parts, from /api/piece
 let partOffsets = []; // velocities added to each part
+let partMuted = []; // parts left out
 let loadedPiece = "";
-const BIN = 6; // velocities per bar (narrower bars zig-zag as the settings round velocities)
-const CHORD_WINDOW_MS = 40; // as roll_builder.h's CHORD_WINDOW_MS
-const LOW_VELOCITY = 20; // below this, a few keys can be weak or miss
 
 function settings() {
   return {
@@ -45,263 +96,27 @@ function settings() {
     contrast: Number(contrast.value),
     voicing: Number(voicing.value),
     repeatBoost: Number(repeatBoost.value),
+    speed: Number(speed.value),
     parts: partOffsets.slice(),
+    muted: partMuted.slice(),
   };
-}
-
-// As the controller shapes them (roll_builder.cpp shapeVelocities): each
-// part's offset, then voicing within each chord, then contrast around the
-// piece's median, then volume; rounded once and kept within 1-127. notes are
-// in the order they're written.
-function shapeVelocities(notes, s) {
-  const shaped = notes.map((n) => n.velocity + (s.parts[n.part] || 0));
-  if (s.voicing !== 100) {
-    for (let first = 0; first < notes.length; ) {
-      let end = first + 1;
-      while (end < notes.length && notes[end].on - notes[first].on < CHORD_WINDOW_MS) end++;
-      if (end - first > 1) {
-        let average = 0;
-        for (let i = first; i < end; i++) average += shaped[i];
-        average /= end - first;
-        for (let i = first; i < end; i++) {
-          shaped[i] = average + ((shaped[i] - average) * s.voicing) / 100;
-        }
-      }
-      first = end;
-    }
-  }
-  if (s.contrast !== 100 && shaped.length) {
-    const sorted = shaped.slice().sort((a, b) => a - b);
-    const middle = Math.floor(sorted.length / 2);
-    const median = sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
-    for (let i = 0; i < shaped.length; i++) {
-      shaped[i] = median + ((shaped[i] - median) * s.contrast) / 100;
-    }
-  }
-  return shaped.map((v) => Math.min(127, Math.max(1, Math.floor((v * s.volume + 50) / 100))));
-}
-
-function histogram(velocities) {
-  const counts = new Array(127).fill(0);
-  velocities.forEach((v) => counts[v - 1]++);
-  return counts;
-}
-
-// The notes the controller shapes, from the note view's list: a note the file
-// has twice at once is shaped once, at the louder of the two velocities.
-function shapedNotes(notes) {
-  const DUPLICATE = 32, MERGED = 1;
-  const twin = (n) => (n.changes & DUPLICATE) || ((n.changes & MERGED) && n.mergedInto === n.on);
-  const louder = new Map();
-  notes.filter(twin).forEach((n) => {
-    const key = n.key + "/" + n.on;
-    louder.set(key, Math.max(louder.get(key) || 0, n.writtenVelocity));
-  });
-  return notes
-    .filter((n) => !twin(n))
-    .map((n) => ({
-      on: n.on,
-      velocity: Math.max(n.writtenVelocity, louder.get(n.key + "/" + n.on) || 0),
-      part: n.part,
-    }));
-}
-
-function describe(counts) {
-  let lowest = 0,
-    highest = 0;
-  counts.forEach((count, i) => {
-    if (!count) return;
-    if (!lowest) lowest = i + 1;
-    highest = i + 1;
-  });
-  return { lowest, highest };
-}
-
-function bins(counts) {
-  const out = [];
-  for (let start = 1; start <= 127; start += BIN) {
-    out.push({
-      from: start,
-      to: Math.min(start + BIN - 1, 127),
-      count: counts
-        .slice(start - 1, start - 1 + BIN)
-        .reduce((a, b) => a + b, 0),
-    });
-  }
-  return out;
-}
-
-const SVG = "http://www.w3.org/2000/svg";
-function svgEl(name, attrs) {
-  const el = document.createElementNS(SVG, name);
-  Object.entries(attrs).forEach(([k, v]) => el.setAttribute(k, v));
-  return el;
-}
-
-function drawVelocities() {
-  if (!pieceNotes) return;
-  const shaped = shapeVelocities(pieceNotes, settings());
-  const written = histogram(pieceNotes.map((n) => n.velocity));
-  const now = histogram(shaped);
-  const a = describe(written),
-    b = describe(now);
-  const lowBefore = pieceNotes.filter((n) => n.velocity < LOW_VELOCITY).length;
-  const lowNow = shaped.filter((v) => v < LOW_VELOCITY).length;
-  velocityLow.textContent = lowNow
-    ? `${lowNow} ${lowNow === 1 ? "note" : "notes"} below velocity ${LOW_VELOCITY}` +
-      (lowNow !== lowBefore ? ` (${lowBefore} as written)` : "") +
-      ": a few keys can be weak or miss down there"
-    : "";
-  const writtenBins = bins(written),
-    playedBins = bins(now);
-
-  const W = velocityChart.clientWidth || 600,
-    H = 164,
-    m = { left: 4, right: 4, top: 28, bottom: 20 };
-  const slot = (W - m.left - m.right) / writtenBins.length;
-  // The scale follows the piece as written, so its outlines stay put while the volume moves.
-  // Bars taller than that are cut with a break and labelled with their count.
-  const top = Math.max(
-    1,
-    Math.ceil(Math.max(...writtenBins.map((x) => x.count)) * 1.2),
-  );
-  const y = (count) =>
-    m.top + (H - m.top - m.bottom) * (1 - Math.min(count, top) / top);
-  const svg = svgEl("svg", {
-    viewBox: `0 0 ${W} ${H}`,
-    role: "img",
-    "aria-label": `Notes by velocity: as written ${a.lowest} to ${a.highest}, with these settings ${b.lowest} to ${b.highest}`,
-  });
-  svg.append(
-    svgEl("line", {
-      x1: m.left,
-      x2: W - m.right,
-      y1: H - m.bottom,
-      y2: H - m.bottom,
-      stroke: "#e1e0d9",
-    }),
-  );
-  playedBins.forEach((bin, i) => {
-    if (!bin.count) return;
-    const h = H - m.bottom - y(bin.count);
-    const x = m.left + i * slot + 1,
-      width = Math.max(slot - 2, 1);
-    svg.append(
-      svgEl("rect", {
-        x,
-        y: y(bin.count),
-        width,
-        height: h,
-        rx: Math.min(2, h / 2),
-        fill: "#2a78d6",
-      }),
-    );
-    if (bin.count > top) {
-      svg.append(
-        svgEl("rect", { x, y: m.top + 6, width, height: 3, fill: "#fff" }),
-      );
-      const label = svgEl("text", {
-        x: x + width / 2,
-        y: m.top - 4,
-        class: "tick",
-        "text-anchor": "middle",
-      });
-      label.textContent = bin.count;
-      svg.append(label);
-    }
-  });
-  writtenBins.forEach((bin, i) => {
-    if (!bin.count) return;
-    svg.append(
-      svgEl("rect", {
-        x: m.left + i * slot + 1.75,
-        y: y(bin.count),
-        width: Math.max(slot - 3.5, 1),
-        height: H - m.bottom - y(bin.count),
-        fill: "none",
-        stroke: "#8a8984",
-        "stroke-width": 1.5,
-      }),
-    );
-  });
-  [1, 32, 64, 96, 127].forEach((v) => {
-    const x =
-      m.left +
-      ((v - 1) / 127) * (W - m.left - m.right) +
-      (v === 127 ? slot / 2 : 0);
-    const label = svgEl("text", {
-      x,
-      y: H - 4,
-      class: "tick",
-      "text-anchor": v === 1 ? "start" : v === 127 ? "end" : "middle",
-    });
-    label.textContent = v === 127 ? "127 (max)" : v;
-    svg.append(label);
-  });
-  // A guide line at a round count, so bar heights can be read.
-  const unit = 10 ** Math.floor(Math.log10(top * 0.9));
-  const guide = Math.floor((top * 0.9) / unit) * unit;
-  svg.append(
-    svgEl("line", {
-      x1: m.left,
-      x2: W - m.right,
-      y1: y(guide),
-      y2: y(guide),
-      stroke: "#e1e0d9",
-      "stroke-dasharray": "3 3",
-    }),
-  );
-  const guideLabel = svgEl("text", {
-    x: W - m.right,
-    y: y(guide) - 4,
-    class: "tick",
-    "text-anchor": "end",
-  });
-  guideLabel.textContent = guide + " notes per bar";
-  svg.append(guideLabel);
-
-  const tip = document.createElement("div");
-  tip.className = "tip";
-  tip.hidden = true;
-  writtenBins.forEach((bin, i) => {
-    const hit = svgEl("rect", {
-      x: m.left + i * slot,
-      y: m.top,
-      width: slot,
-      height: H - m.top - m.bottom,
-      fill: "transparent",
-    });
-    hit.addEventListener("pointerenter", () => {
-      tip.textContent = `velocity ${bin.from}-${bin.to}: ${bin.count} as written, ${playedBins[i].count} with these settings`;
-      tip.hidden = false;
-      const x = m.left + i * slot + slot / 2;
-      tip.style.left =
-        Math.min(
-          Math.max(0, x - tip.offsetWidth / 2),
-          velocityChart.clientWidth - tip.offsetWidth,
-        ) + "px";
-      tip.style.top = "-6px";
-    });
-    hit.addEventListener("pointerleave", () => {
-      tip.hidden = true;
-    });
-    svg.append(hit);
-  });
-  velocityChart.replaceChildren(svg, tip);
 }
 
 // The piece's parts, and their offsets, for the tracks list.
 async function loadPiece() {
-  let parts = [], offsets = [];
+  let parts = [], offsets = [], muted = [];
   try {
     const [piece, dynamics] = await Promise.all([fetch("/api/piece"), fetch("/api/dynamics")]);
     parts = piece.ok ? (await piece.json()).parts || [] : [];
-    offsets = dynamics.ok ? (await dynamics.json()).parts || [] : [];
+    const saved = dynamics.ok ? await dynamics.json() : {};
+    offsets = saved.parts || [];
+    muted = saved.muted || [];
   } catch (error) {
     parts = [];
   }
   partInfo = parts;
   partOffsets = parts.map((_, i) => offsets[i] || 0);
+  partMuted = parts.map((_, i) => Boolean(muted[i]));
   showParts();
   drawVelocities();
 }
@@ -338,7 +153,29 @@ function showParts() {
         show();
         dynamicsChanged();
       });
-      row.append(swatch, label, slider, value);
+      // Mute: left out, as if the file didn't have it (never every part).
+      const mute = document.createElement("button");
+      mute.type = "button";
+      mute.className = "mute";
+      const showMute = () => {
+        mute.textContent = partMuted[i] ? "Muted" : "Mute";
+        mute.setAttribute("aria-pressed", String(partMuted[i]));
+        row.classList.toggle("muted", partMuted[i]);
+        slider.disabled = partMuted[i];
+      };
+      showMute();
+      mute.addEventListener("click", () => {
+        const playing = partInfo.filter((p, j) => p.notes > 0 && !partMuted[j] && j !== i).length;
+        if (!partMuted[i] && playing === 0) {
+          message.classList.remove("error");
+          message.textContent = "Every other track is muted: unmute one first";
+          return;
+        }
+        partMuted[i] = !partMuted[i];
+        showMute();
+        dynamicsChanged();
+      });
+      row.append(swatch, label, slider, value, mute);
       return row;
     }),
   );
@@ -364,7 +201,6 @@ noteView.onLoaded((notes) => {
   velocitySection.hidden = !pieceNotes;
   drawVelocities();
 });
-window.addEventListener("resize", drawVelocities);
 
 function formatTime(ms) {
   const seconds = Math.floor(ms / 1000);
@@ -375,8 +211,11 @@ async function request(url, options) {
   try {
     const response = await fetch(url, options);
     const body = await response.json();
-    message.textContent = response.ok ? "" : body.error;
-    message.classList.toggle("error", !response.ok);
+    if (!response.ok) {
+      // (A success leaves any message to fade: it may be about something else.)
+      message.textContent = body.error;
+      message.classList.add("error");
+    }
     return response.ok ? body : null;
   } catch (error) {
     message.textContent = "request failed: " + error.message;
@@ -390,8 +229,10 @@ fileInput.addEventListener("change", async () => {
   if (!file) {
     return;
   }
-  message.textContent = "Uploading...";
+  message.textContent = "";
   message.classList.remove("error");
+  uploading = true;
+  showBusy();
   const summary = await request(
     "/api/midi?name=" + encodeURIComponent(file.name),
     {
@@ -400,6 +241,9 @@ fileInput.addEventListener("change", async () => {
       body: file,
     },
   );
+  uploading = false;
+  showBusy();
+  loadLibrary();
   if (!summary) {
     message.textContent = `Couldn't load ${file.name}: ${message.textContent}`;
   } else {
@@ -420,6 +264,14 @@ fileInput.addEventListener("change", async () => {
         summary.duplicateNotes + " notes the file has twice at once were played once",
       );
     }
+    const saved = {
+      saved: "Saved in the library",
+      already: `Already in the library as “${summary.title}”: loaded with its settings`,
+      full: "The library is full, so it wasn't saved (delete some pieces to make room)",
+      unavailable: "Not saved: the controller has no library space (upload the firmware with the new partition table)",
+      failed: "Couldn't save it in the library",
+    }[summary.library];
+    if (saved) notices.unshift(saved);
     message.textContent = notices.join("; ");
   }
   fileInput.value = "";
@@ -428,9 +280,10 @@ fileInput.addEventListener("change", async () => {
 
 playButton.addEventListener("click", async () => {
   // Paused, it goes on from where it stopped (or from where the bar was moved to).
-  const from = !paused && startFrom > 0 ? "?from=" + startFrom : "";
+  const from = !paused && startFrom > 0 ? `?from=${startFrom}&speed=${pieceSpeed}` : "";
   await request("/api/playback/play" + from, { method: "POST" });
   refresh();
+  loadLibrary(); // its last played
 });
 
 pauseButton.addEventListener("click", async () => {
@@ -451,7 +304,7 @@ noteView.onPick((ms) => goTo(Math.min(ms, durationMs)));
 
 async function goTo(ms) {
   if (playing || paused) {
-    await request("/api/playback/seek?to=" + ms, { method: "POST" });
+    await request(`/api/playback/seek?to=${ms}&speed=${pieceSpeed}`, { method: "POST" });
   } else {
     startFrom = ms;
   }
@@ -465,8 +318,10 @@ stopButton.addEventListener("click", async () => {
 });
 
 // Volume, contrast, voicing and each part's offset shape every velocity;
-// they apply from the next Play.
+// they apply from the next Play. A new speed applies at once when nothing's
+// playing (the controller rebuilds the piece), else after a pause.
 function showDynamics() {
+  speedValue.textContent = speed.value + "%";
   volumeValue.textContent = volume.value + "%";
   contrastValue.textContent = contrast.value + "%";
   voicingValue.textContent = voicing.value + "%";
@@ -476,6 +331,7 @@ function showDynamics() {
 let dynamicsTimer;
 function dynamicsChanged() {
   dynamicsChanging = true;
+  showButtons();
   showDynamics();
   drawVelocities();
   clearTimeout(dynamicsTimer);
@@ -486,6 +342,7 @@ function dynamicsChanged() {
       body: JSON.stringify(settings()),
     });
     dynamicsChanging = false;
+    showButtons();
     if (saved) {
       noteView.load(); // merges and limits depend on the velocities
       volumeNote.textContent = playing ? "applies from the next Play, or after a pause" : "";
@@ -493,17 +350,42 @@ function dynamicsChanged() {
   }, 300);
 }
 
-[volume, contrast, voicing, repeatBoost].forEach((slider) => slider.addEventListener("input", dynamicsChanged));
+[speed, volume, contrast, voicing, repeatBoost].forEach((slider) => slider.addEventListener("input", dynamicsChanged));
 
 resetButton.addEventListener("click", () => {
   volume.value = 100;
+  speed.value = 100;
   contrast.value = 100;
   voicing.value = 100;
   repeatBoost.value = 0;
   partOffsets = partOffsets.map(() => 0);
+  partMuted = partMuted.map(() => false);
   showParts();
   dynamicsChanged();
 });
+
+// The solenoids' heat, when the controller watches it (their coils measured).
+const heatLine = document.getElementById("heat");
+function showHeat(heat) {
+  heatLine.hidden = !heat || !heat.watched;
+  if (heatLine.hidden) return;
+  const name = (channel) => (channel >= 88 ? "the pedal solenoids" : `${noteName(channel + 21)}'s solenoid`);
+  const minutes = (s) => (s < 60 ? "under a minute" : `about ${Math.ceil(s / 60)} min`);
+  const degrees = (c) => `${c.toFixed(0)} °C`;
+  const cooling = heat.load >= heat.resumeLoad;
+  const stopped = { paused: "Paused", testStopped: "Test stopped", released: "Let go" }[heat.action];
+  heatLine.className = "heat" + (stopped && cooling ? " hot" : cooling ? " warm" : "");
+  if (stopped && cooling) {
+    heatLine.textContent = `${stopped}: ${name(heat.actionChannel)} reached the heat limit. ` +
+      `Play can go on once ${heat.actionChannel >= 88 ? "they've" : "it's"} cooled, in ${minutes(heat.coolS)}.`;
+  } else if (cooling) {
+    heatLine.textContent = `Warm: ${name(heat.channel)} at ${degrees(heat.riseC)} of the ${degrees(heat.limitC)} ` +
+      `allowed. Play waits until under ${degrees(heat.limitC * heat.resumeLoad)}.`;
+  } else {
+    heatLine.textContent = `Solenoid heat: warmest is ${name(heat.channel)}, ${degrees(heat.riseC)} of ` +
+      `${degrees(heat.limitC)} allowed`;
+  }
+}
 
 async function refresh() {
   let status, sampledAt;
@@ -516,6 +398,9 @@ async function refresh() {
     return;
   }
   const playback = status.playback;
+  showHeat(status.heat);
+  controllerBuilding = Boolean(playback.building);
+  showBusy();
   const wasActive = playing || paused;
   const wasPlaying = playing;
   playing = playback.state === "playing";
@@ -527,17 +412,27 @@ async function refresh() {
     noteView.load(); // shows the current settings again, if they were changed while playing
   }
   if (!dynamicsChanging && status.volume !== undefined) {
-    const now = [Number(volume.value), Number(contrast.value), Number(voicing.value), Number(repeatBoost.value)];
-    const saved = [status.volume, status.contrast ?? 100, status.voicing ?? 100, status.repeatBoost ?? 0];
+    const now = [Number(volume.value), Number(contrast.value), Number(voicing.value), Number(repeatBoost.value),
+      Number(speed.value)];
+    const saved = [status.volume, status.contrast ?? 100, status.voicing ?? 100, status.repeatBoost ?? 0,
+      status.speed ?? 100];
     if (now.some((v, i) => v !== saved[i])) {
-      [volume.value, contrast.value, voicing.value, repeatBoost.value] = saved;
+      [volume.value, contrast.value, voicing.value, repeatBoost.value, speed.value] = saved;
       showDynamics();
       drawVelocities();
     }
   }
-  const pieceKey = playback.piece
-    ? playback.piece.title + "/" + playback.piece.notes
-    : "";
+  const pieceKey = playback.piece ? String(playback.piece.id ?? playback.piece.title) : "";
+  const builtAt = playback.piece?.speed ?? 100;
+  if (pieceKey === loadedPiece && builtAt !== pieceSpeed) {
+    // Rebuilt for a new speed: Play still starts from the same point in the music.
+    if (!playing && !paused && startFrom > pieceLead) {
+      startFrom = Math.round(pieceLead + ((startFrom - pieceLead) * pieceSpeed) / builtAt);
+    }
+    noteView.load();
+  }
+  pieceSpeed = builtAt;
+  pieceLead = playback.piece?.leadMs ?? 0;
   if (pieceKey !== loadedPiece) {
     loadedPiece = pieceKey;
     startFrom = 0;
@@ -549,14 +444,17 @@ async function refresh() {
     volumeNote.textContent = "";
   }
 
+  const libraryId = playback.piece?.libraryId || "";
+  const wasBusy = libraryBusy;
+  libraryBusy = playing || paused || uploading;
+  if (libraryId !== loadedLibraryId || wasBusy !== libraryBusy) {
+    loadedLibraryId = libraryId;
+    drawLibrary();
+  }
   if (playback.piece) {
-    piece.textContent =
-      playback.piece.title +
-      " (" +
-      playback.piece.notes +
-      " notes, " +
-      formatTime(playback.piece.durationMs) +
-      ")";
+    const saved = libraryPieces.find((p) => p.id === libraryId);
+    piece.textContent = saved ? saved.name : playback.piece.title;
+    pieceMeta.textContent = `${playback.piece.notes.toLocaleString()} notes · ${formatTime(playback.piece.durationMs)}`;
     durationMs = playback.piece.durationMs;
     progress.max = Math.max(durationMs, 1);
     if (!seeking) {
@@ -569,6 +467,7 @@ async function refresh() {
     }
   } else {
     piece.textContent = "No piece loaded";
+    pieceMeta.textContent = "Pick one from the library, or add one.";
     time.textContent = "";
     durationMs = 0;
     progress.value = 0;
@@ -583,12 +482,10 @@ async function refresh() {
     );
   }
 
-  fileInput.disabled = playing || paused;
-  playButton.disabled = playing || !playback.piece;
-  playButton.textContent = paused ? "Resume" : "Play";
-  pauseButton.disabled = !playing;
-  stopButton.disabled = !playing && !paused;
+  hasPiece = Boolean(playback.piece);
+  showButtons();
 }
 
 refresh();
+loadLibrary();
 setInterval(refresh, 500);

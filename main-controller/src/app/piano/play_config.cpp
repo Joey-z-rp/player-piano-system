@@ -2,6 +2,7 @@
 #include <ArduinoJson.h>
 #include <ctype.h>
 #include <math.h>
+#include <stdio.h>
 #include <string.h>
 
 namespace
@@ -57,6 +58,31 @@ namespace
     strcpy(out, text);
     return true;
   }
+  // A number within [low, high], if given.
+  bool readFloat(JsonVariant value, const char *name, float low, float high, float &out, std::string &error)
+  {
+    if (value.isNull())
+    {
+      return true;
+    }
+    if (!value.is<double>() || value.as<double>() < low || value.as<double>() > high)
+    {
+      char text[96];
+      snprintf(text, sizeof(text), "%s must be a number from %g to %g", name, low, high);
+      error = text;
+      return false;
+    }
+    out = value.as<float>();
+    return true;
+  }
+
+  bool readCoil(JsonVariant json, const char *prefix, CoilSettings &coil, std::string &error)
+  {
+    std::string p = prefix;
+    return readFloat(json[p + "_coil_ohms"], (p + "_coil_ohms").c_str(), 0, 1000, coil.ohms, error) &&
+           readFloat(json[p + "_coil_rth"], (p + "_coil_rth").c_str(), 0, 100, coil.rthCPerW, error) &&
+           readFloat(json[p + "_coil_tau_s"], (p + "_coil_tau_s").c_str(), 0, 7200, coil.tauS, error);
+  }
 } // namespace
 
 bool readPlayConfig(const char *json, size_t length, PlayConfig &config, std::string &error)
@@ -80,6 +106,20 @@ bool readPlayConfig(const char *json, size_t length, PlayConfig &config, std::st
       !readInto(doc["pedal_min_ms"], "pedal_min_ms", 0, 1000, next.pedalMinMs, error) ||
       !readPedalCommand(doc["pedal_press"], "pedal_press", next.pedalPress, error) ||
       !readPedalCommand(doc["pedal_release"], "pedal_release", next.pedalRelease, error))
+  {
+    return false;
+  }
+  JsonVariant squared = doc["heat_squared"];
+  if (!squared.isNull() && !squared.is<bool>())
+  {
+    error = "heat_squared must be true or false";
+    return false;
+  }
+  next.heat.squared = squared.isNull() ? next.heat.squared : squared.as<bool>();
+  if (!readFloat(doc["heat_volts"], "heat_volts", 1, 100, next.heat.volts, error) ||
+      !readFloat(doc["heat_limit_c"], "heat_limit_c", 5, 150, next.heat.limitC, error) ||
+      !readCoil(doc.as<JsonVariant>(), "key", next.heat.keys, error) ||
+      !readCoil(doc.as<JsonVariant>(), "pedal", next.heat.pedal, error))
   {
     return false;
   }
@@ -178,6 +218,15 @@ std::string playConfigJson(const PlayConfig &config)
   doc["pedal_min_ms"] = config.pedalMinMs;
   doc["pedal_press"] = config.pedalPress;
   doc["pedal_release"] = config.pedalRelease;
+  doc["heat_volts"] = config.heat.volts;
+  doc["heat_squared"] = config.heat.squared;
+  doc["heat_limit_c"] = config.heat.limitC;
+  doc["key_coil_ohms"] = config.heat.keys.ohms;
+  doc["key_coil_rth"] = config.heat.keys.rthCPerW;
+  doc["key_coil_tau_s"] = config.heat.keys.tauS;
+  doc["pedal_coil_ohms"] = config.heat.pedal.ohms;
+  doc["pedal_coil_rth"] = config.heat.pedal.rthCPerW;
+  doc["pedal_coil_tau_s"] = config.heat.pedal.tauS;
   std::string out;
   serializeJson(doc, out);
   return out;

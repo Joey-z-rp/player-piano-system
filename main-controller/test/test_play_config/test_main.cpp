@@ -83,6 +83,28 @@ void test_pedal_commands()
   TEST_ASSERT_EQUAL_STRING("0", config.pedalRelease);
 }
 
+void test_heat_settings()
+{
+  PlayConfig config;
+  TEST_ASSERT_EQUAL_FLOAT(24, config.heat.volts);
+  TEST_ASSERT_FALSE(config.heat.keys.measured()); // until measured
+  std::string error;
+  std::string json = "{\"key_coil_ohms\":12.5,\"key_coil_rth\":3.2,\"key_coil_tau_s\":240,\"heat_squared\":false,"
+                     "\"heat_limit_c\":45}";
+  TEST_ASSERT_TRUE_MESSAGE(readPlayConfig(json.data(), json.size(), config, error), error.c_str());
+  TEST_ASSERT_TRUE(config.heat.keys.measured());
+  TEST_ASSERT_FALSE(config.heat.pedal.measured());
+  TEST_ASSERT_EQUAL_FLOAT(12.5, config.heat.keys.ohms);
+  TEST_ASSERT_FALSE(config.heat.squared);
+  PlayConfig back;
+  std::string saved = playConfigJson(config);
+  TEST_ASSERT_TRUE(readPlayConfig(saved.data(), saved.size(), back, error));
+  TEST_ASSERT_TRUE(back == config);
+  json = "{\"heat_limit_c\":500}";
+  TEST_ASSERT_FALSE(readPlayConfig(json.data(), json.size(), config, error));
+  TEST_ASSERT_EQUAL_FLOAT(45, config.heat.limitC);
+}
+
 int main()
 {
   UNITY_BEGIN();
@@ -91,5 +113,6 @@ int main()
   RUN_TEST(test_reads_repeat_limits_and_dead_zone);
   RUN_TEST(test_bad_settings_change_nothing);
   RUN_TEST(test_pedal_commands);
+  RUN_TEST(test_heat_settings);
   return UNITY_END();
 }

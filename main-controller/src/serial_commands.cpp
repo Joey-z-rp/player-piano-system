@@ -64,6 +64,13 @@ void SerialCommands::handleLine()
     Serial.println("#OK");
     return;
   }
+  if (command == "OFFSETS")
+  {
+    // The per-key velocity offsets, for the tools: one line, then #OK.
+    Serial.printf("#OFFSETS %s\n", piano->keyOffsetsJson().c_str());
+    Serial.println("#OK");
+    return;
+  }
   if (command == "RESET")
   {
     Serial.println(piano->resetDrivers() == PlaybackResult::Ok ? "#OK" : "#ERR queue full");

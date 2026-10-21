@@ -28,6 +28,9 @@ from calibration_common import (  # noqa: E402
 from calibration_data import drive_settings, key_drive, load_by_key, load_flags  # noqa: E402
 
 
+OFFSETS_NOTE = ("If keys have offsets on the controller (the test page marks them), they were set by ear against "
+                "the old table: listen again and adjust or clear them.")
+
 def is_cut_short(rows: list[dict], cut_short_db: float) -> bool:
     """One miss among at least 3 hits, as loud as the hits: the string was
     struck, but the note stopped early."""
@@ -396,6 +399,7 @@ def update_drive(args) -> None:
     print(f"drive: {header['drive']}")
     print(f"keys whose own drive settings changed: {', '.join(map(str, changed)) or 'none'}")
     print(f"wrote {args.out}; upload it to the controller with: pio run -t uploadfs")
+    print(OFFSETS_NOTE)
 
 
 def table(args) -> None:
@@ -468,6 +472,7 @@ def table(args) -> None:
     print(f"wrote {args.out} ({len(mapping)} keys, {len(pedal)} with the pedal down too; "
           "others play the default mapping)")
     print("upload it to the controller with: pio run -t uploadfs")
+    print(OFFSETS_NOTE)
 
 
 def report(args) -> None:

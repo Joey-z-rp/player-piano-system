@@ -10,6 +10,7 @@
 #include <freertos/queue.h>
 #include <vector>
 #include "app/piano/piano_roll.h"
+#include "app/piano/key_offsets.h"
 #include "app/piano/play_config.h"
 
 class Rs485Module;
@@ -32,25 +33,35 @@ static const uint8_t SUSTAIN_PEDAL_CHANNELS[] = {88, 89};
 
 // Volume: every note's velocity is scaled by this percent, within these
 // limits. A change applies from the next play: a loaded piece is rebuilt for
-// it then, so its notes stay timed to how its hammers land.
+// it then, so its notes stay timed to how its hammers land. Like everything
+// else that shapes a piece (Dynamics), it's the loaded piece's own: each new
+// piece starts from the defaults, and a library piece keeps its own.
 static const uint16_t MIN_VOLUME = 10;
 static const uint16_t MAX_VOLUME = 200;
 static const uint16_t DEFAULT_VOLUME = 100;
 // Contrast and voicing stretch velocities apart (see Dynamics), in percent,
-// within these limits; saved like the volume. Each part's offset (in
-// velocities) is for the loaded piece only, and starts at 0 for each new one.
+// within these limits; each part's offset is in velocities.
 static const uint16_t MIN_CONTRAST = 50;
 static const uint16_t MAX_CONTRAST = 250;
 static const uint16_t MIN_VOICING = 50;
 static const uint16_t MAX_VOICING = 300;
 static const int8_t MAX_PART_OFFSET = 20;
-static const uint8_t MAX_REPEAT_BOOST = 40; // velocities a repeat can be played louder (saved too)
+static const uint8_t MAX_REPEAT_BOOST = 40; // velocities a repeat can be played louder
+// Speed, in percent of the written tempo, for the loaded piece only: 100 for
+// each new one. Unlike the rest it changes where things are on the piece's
+// timeline, so when nothing is playing the piece is rebuilt for it at once.
+static const uint16_t MIN_SPEED = 50;
+static const uint16_t MAX_SPEED = 150;
 
 // Before each song, and on request, the driver boards are restarted and given
 // this long to come back, so a driver stuck in a bad state can't carry it
 // into a song.
 static const char DRIVER_RESET_COMMAND[] = "RESET:ALL";
 static const uint32_t DRIVER_RESET_WAIT_MS = 100;
+// How often the solenoids' heat is estimated, and how far a hot one must
+// cool (of its limit) before Play goes on.
+static const uint32_t HEAT_TICK_MS = 250;
+static const float HEAT_RESUME_LOAD = 0.8f;
 
 enum class SubmitResult
 {
@@ -65,7 +76,8 @@ enum class PlaybackResult
   Busy,
   NoRoll,
   NotPlaying,
-  QueueFull
+  QueueFull,
+  TooHot // a solenoid is still cooling (see heatStatus)
 };
 
 enum class PlaybackState : uint8_t
@@ -78,6 +90,7 @@ enum class PlaybackState : uint8_t
 struct PlaybackStatus
 {
   PlaybackState state;
+  bool testing; // playing a test (playTest), not the loaded piece
   uint32_t positionMs;
   std::shared_ptr<const PianoRoll> roll; // null when nothing is loaded
 };
@@ -89,8 +102,9 @@ class PianoController
 public:
   PianoController();
 
-  // Key presses take their duty from velocityTable; it must outlive the controller.
-  bool init(Rs485Module *rs485, const VelocityTable *velocityTable);
+  // Key presses take their duty from velocityTable; it must outlive the
+  // controller, which gives it the saved per-key offsets.
+  bool init(Rs485Module *rs485, VelocityTable *velocityTable);
 
   // Safe to call from any task.
   SubmitResult submitDriverCommand(const String &command);
@@ -98,27 +112,65 @@ public:
   // Plays the loaded piece from fromMs on its timeline (see findRollStart).
   // CONTINUE plays from the start, or where it was paused. Going on from a
   // pause rebuilds the piece if the dynamics have changed.
+  // atSpeed: the speed the piece was built at when fromMs was read from it,
+  // so it's moved to the same point if it's been rebuilt since (0: as it is).
   static const uint32_t CONTINUE = UINT32_MAX;
-  PlaybackResult play(uint32_t fromMs = CONTINUE);
+  PlaybackResult play(uint32_t fromMs = CONTINUE, uint16_t atSpeed = 0);
   PlaybackResult pause();
-  // Jumps the playing or paused piece to toMs.
-  PlaybackResult seek(uint32_t toMs);
+  // Jumps the playing or paused piece to toMs (atSpeed as for play).
+  PlaybackResult seek(uint32_t toMs, uint16_t atSpeed = 0);
   PlaybackResult stop();
+  // Plays a few notes built like a piece (the test page's strikes and
+  // sequences), without touching the loaded piece. A test replaces one
+  // still playing; Busy while the piece is playing or paused. Pause and seek
+  // don't apply to it; stop does.
+  PlaybackResult playTest(std::shared_ptr<const PianoRoll> roll);
   // Stops any song and restarts every driver board, which lets every key go.
   PlaybackResult resetDrivers();
   // Presses or gradually releases the sustain pedal, as a song does.
   PlaybackResult setPedal(bool down);
   PlaybackStatus status() const;
+
+  // The solenoids' estimated heat (HeatModel, from the play config's coil
+  // settings): the one nearest its limit, and what was last done about one
+  // reaching it. A piece pauses at the limit (a test stops; a key or pedal
+  // held by hand is let go), and Play waits until it has cooled to
+  // HEAT_RESUME_LOAD of the limit.
+  enum class HeatAction : uint8_t
+  {
+    None,
+    Paused,      // the piece
+    TestStopped,
+    Released     // the channel, held by a manual command
+  };
+  struct HeatStatus
+  {
+    bool watched = false; // any coil measured
+    uint8_t channel = 0;  // the hottest watched one
+    float riseC = 0;
+    float limitC = 0;
+    float load = 0;       // riseC / limitC
+    float coolS = 0;      // until it's down to HEAT_RESUME_LOAD
+    HeatAction action = HeatAction::None;
+    uint8_t actionChannel = 0;
+  };
+  HeatStatus heatStatus() const;
+  // True while the loaded piece is being rebuilt (for new settings or speed).
+  bool building() const;
   size_t pendingCommands() const;
-  // Saved, so it survives a restart. Returns false if out of range.
+  // The loaded piece's (see MIN_VOLUME). Return false if out of range.
   bool setVolume(uint16_t percent);
   uint16_t volume() const;
-  // Saved too. Return false if out of range.
   bool setContrast(uint16_t percent);
   bool setVoicing(uint16_t percent);
   bool setRepeatBoost(uint8_t velocities);
   // For the loaded piece (see MidiEvent::part). Returns false if out of range.
   bool setPartOffset(uint8_t part, int8_t velocities);
+  // Leaves a part out (or back in), for the loaded piece.
+  bool setPartMuted(uint8_t part, bool muted);
+  // For the loaded piece too. Applies at once when nothing is playing (a
+  // paused position moves with it), else from the next pause or Play.
+  bool setSpeed(uint16_t percent);
   // Everything a piece is shaped by, as it is now: applies from the next Play.
   Dynamics dynamics() const;
   // The timing rules pieces are played with (the config page), saved on the
@@ -128,6 +180,15 @@ public:
   uint32_t playConfigVersion() const; // changes whenever the config does
   bool setPlayConfig(const char *json, size_t length, std::string &error);
   void resetPlayConfig();
+  // Per-key velocity offsets (key_offsets.h), saved on the controller. They
+  // apply at once to single presses and tests, and to pieces from the next
+  // Play (playConfigVersion changes with them, so pieces are rebuilt).
+  std::string keyOffsetsJson() const;
+  // A key's curves: up, and its own pedal-down one (null: none, it uses up).
+  void setKeyOffsets(uint8_t key, const OffsetCurve &up, const OffsetCurve *pedal);
+  void clearKeyOffsets();
+  void setAllKeyOffsets(const KeyOffsets &offsets); // e.g. from a backup
+
   // For building rolls timed to how this piano's hammers land.
   const VelocityTable *velocities() const;
 
@@ -143,13 +204,16 @@ private:
     Stop,
     ResetDrivers,
     PedalDown,
-    PedalUp
+    PedalUp,
+    Rebuild, // for a new speed, when nothing is playing
+    PlayTest
   };
 
   struct Message
   {
     MessageType type;
-    uint32_t timeMs; // Play and Seek
+    uint32_t timeMs;  // Play and Seek
+    uint16_t atSpeed; // Play and Seek: see play()
     char text[DRIVER_COMMAND_MAX_LENGTH + 1];
   };
 
@@ -157,32 +221,47 @@ private:
   bool post(const Message &message);
   void run();
   void handleMessage(const Message &message);
-  void startPlayback(uint32_t fromMs);
-  void resumePlayback(uint32_t fromMs);
+  void startPlayback(uint32_t fromMs, uint16_t atSpeed);
+  void resumePlayback(uint32_t fromMs, uint16_t atSpeed);
+  uint32_t toLoadedSpeed(uint32_t ms, uint16_t atSpeed) const;
   void playFrom(uint32_t fromMs);
-  void rebuildForDynamics();
+  // positionMs (if given) is moved to the same point in the rebuilt piece.
+  void rebuildForDynamics(uint32_t *positionMs = nullptr);
+  void rebuildIfSpeedChanged();
   void playDueEvents();
   void finishPlayback();
   void sendRollEvent(const RollEvent &event);
   void releaseAll();
   void restartDrivers();
   void sendPedal(bool down);
+  void loadSettings(); // at init (piano_settings.cpp)
+  void watchHeat();    // every HEAT_TICK_MS (piano_heat.cpp)
+  bool tooHotToPlay() const;
+  void clearHeatAction();
+  void pausePlayback();
   void saveConfig(const PlayConfig &config);
+  void useKeyOffsets(std::shared_ptr<const KeyOffsets> offsets); // and save them
   bool send(const char *command);
   void sendPress(uint8_t key, uint8_t velocity, bool pedal, bool repeat);
 
   Rs485Module *rs485;
-  const VelocityTable *velocityTable;
+  VelocityTable *velocityTable;
+  std::mutex offsetsMutex; // one change to the offsets at a time
   QueueHandle_t messageQueue;
 
   mutable std::mutex rollMutex;
   std::shared_ptr<const PianoRoll> loadedRoll;
+  std::shared_ptr<const PianoRoll> testRoll; // waiting to be played (playTest)
+  std::atomic<bool> testing;
   std::atomic<PlaybackState> state;
   std::atomic<uint16_t> volumePercent;
   std::atomic<uint16_t> contrastPercent;
   std::atomic<uint16_t> voicingPercent;
   std::atomic<uint8_t> repeatBoost;
   std::atomic<int8_t> partOffsets[MAX_MIDI_PARTS];
+  std::atomic<uint16_t> speedPercent;
+  std::atomic<uint16_t> mutedParts;
+  std::atomic<bool> rebuilding;
   mutable std::mutex configMutex;
   PlayConfig config;
   std::atomic<uint32_t> configVersion;
@@ -197,6 +276,11 @@ private:
   std::vector<size_t> skippedPresses;
   size_t nextSkipped;
   PlayConfig playingConfig; // the config the playing roll was built with
+  mutable std::mutex heatMutex;
+  HeatModel heat;
+  HeatAction heatAction = HeatAction::None;
+  uint8_t heatActionChannel = 0;
+  uint32_t heatCheckedMs = 0;
 };
 
 #endif // PIANO_CONTROLLER_H

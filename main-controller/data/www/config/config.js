@@ -11,7 +11,9 @@ function say(text, error = false) {
 }
 
 const rows = () => [...document.querySelectorAll(".row[data-key]")];
-const show = (value, kind) => (kind === "list" ? value.join(", ") : String(value));
+const show = (value, kind) => (kind === "list" ? value.join(", ")
+  : typeof value === "boolean" ? (value ? "duty squared" : "duty") : String(value));
+const field = (row) => row.querySelector("input, select");
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
 function limitRow(limit = ["", "", ""]) {
@@ -26,7 +28,9 @@ function limitRow(limit = ["", "", ""]) {
   }
   const remove = document.createElement("button");
   remove.type = "button";
-  remove.textContent = "Remove";
+  remove.textContent = "×";
+  remove.title = "Remove this row";
+  remove.setAttribute("aria-label", "Remove this row");
   remove.addEventListener("click", () => { tr.remove(); markChanged(); });
   const td = document.createElement("td");
   td.append(remove);
@@ -42,10 +46,11 @@ function readLimits() {
 function read() {
   const out = { repeat_limits: readLimits() };
   for (const row of rows()) {
-    const value = row.querySelector("input").value.trim();
+    const value = field(row).value.trim();
     const kind = row.dataset.kind;
     out[row.dataset.key] = kind === "text" ? value
       : kind === "list" ? value.split(/[\s,]+/).filter(Boolean).map(Number)
+      : kind === "select" ? value === "true"
       : Number(value);
   }
   return out;
@@ -63,11 +68,14 @@ function markChanged() {
 function fill(config) {
   for (const row of rows()) {
     const key = row.dataset.key;
-    row.querySelector("input").value = show(config[key], row.dataset.kind);
+    field(row).value = row.dataset.kind === "select" ? String(config[key]) : show(config[key], row.dataset.kind);
     row.querySelector(".default").textContent = `(default ${show(defaults[key], row.dataset.kind)})`;
-    row.querySelector("input").oninput = markChanged;
+    field(row).oninput = field(row).onchange = markChanged;
   }
   limitsBody.replaceChildren(...config.repeat_limits.map(limitRow));
+  const measured = (kind) => ["ohms", "rth", "tau_s"].every((n) => config[`${kind}_coil_${n}`] > 0);
+  document.getElementById("heat-watched").textContent =
+    `Watched now: ${[measured("key") && "the keys", measured("pedal") && "the pedal"].filter(Boolean).join(" and ") || "none"}.`;
   document.getElementById("limits-default").textContent =
     "Default: " + defaults.repeat_limits.map(([from, soft, loud]) => `from ${from}: ${soft} / ${loud} ms`).join(", ") + ".";
   markChanged();

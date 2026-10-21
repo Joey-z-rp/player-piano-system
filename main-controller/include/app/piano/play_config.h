@@ -4,6 +4,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <string>
+#include "app/piano/heat_model.h"
 
 // How long a repeat (a key struck again soon after its last note) needs, by
 // how loud it is: see PlayConfig.
@@ -64,6 +65,11 @@ struct PlayConfig
   // Its press and release commands (after "P:<channel>:"), sent to both its solenoids.
   char pedalPress[PEDAL_COMMAND_LENGTH] = "100:30:100:30:55";
   char pedalRelease[PEDAL_COMMAND_LENGTH] = "40:40:30:40:0";
+
+  // Solenoid heat (see HeatModel): the supply, each kind of coil (0s until
+  // measured: not watched), and the rise allowed. A piece pauses at the
+  // limit and can't go on until they've cooled to HEAT_RESUME_LOAD of it.
+  HeatSettings heat;
 };
 
 // Reads the settings in json over config: any not given keep their values.

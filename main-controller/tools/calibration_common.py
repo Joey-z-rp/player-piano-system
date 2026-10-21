@@ -7,6 +7,7 @@ for every tool; each tool's command line can still override them.
 
 from __future__ import annotations
 
+import copy
 import json
 import statistics
 import sys
@@ -463,6 +464,17 @@ class Connection:
     def _read_config(self) -> dict:
         raise NotImplementedError
 
+    def offsets(self) -> dict:
+        """The controller's per-key velocity offsets (include/app/piano/
+        key_offsets.h), set on the test page: {"44": {"up": [[velocity,
+        offset], ...], "pedal": [...]}, ...}. See with_offsets."""
+        if not hasattr(self, "_offsets"):
+            self._offsets = self._read_offsets()
+        return self._offsets
+
+    def _read_offsets(self) -> dict:
+        raise NotImplementedError
+
     def reset_drivers(self) -> None:
         """Restarts every driver board, then waits DRIVER_RESET_WAIT_S."""
         self._reset_drivers()
@@ -577,6 +589,13 @@ class WifiConnection(Connection):
         except (OSError, urllib.error.URLError) as error:
             sys.exit(f"Couldn't read the controller's config ({error}). Is its firmware up to date?")
 
+    def _read_offsets(self) -> dict:
+        try:
+            with urllib.request.urlopen(self.base + "/api/offsets", timeout=5) as response:
+                return json.loads(response.read())["keys"]
+        except (OSError, urllib.error.URLError) as error:
+            sys.exit(f"Couldn't read the controller's key offsets ({error}). Is its firmware up to date?")
+
 
 class UsbConnection(Connection):
     """Sends driver commands over the controller's USB serial port (see
@@ -662,6 +681,12 @@ class UsbConnection(Connection):
         if not reply or not reply.startswith("#CONFIG "):
             sys.exit("The controller didn't send its config. Is its firmware up to date?")
         return json.loads(reply[len("#CONFIG "):])
+
+    def _read_offsets(self) -> dict:
+        reply = self._command("OFFSETS")
+        if not reply or not reply.startswith("#OFFSETS "):
+            sys.exit("The controller didn't send its key offsets. Is its firmware up to date?")
+        return json.loads(reply[len("#OFFSETS "):])["keys"]
 
 
 def connect(args) -> Connection:
@@ -792,6 +817,70 @@ def drive_command(key: int, duty: float, landing_ms: float | None, drive: dict, 
         hold_at = max(round(landing_ms + setting("coast_offset_ms")), strike_ms)
         phases = f"{coast}:{hold_at - strike_ms}"
     return f"P:{key}:{format_duty(duty)}:{strike_ms}:{phases}:{format_duty(setting('hold_duty'))}"
+
+
+def adjusted_velocity(points: list, velocity: int) -> int:
+    """The velocity a key with this offset curve plays for `velocity`
+    (OffsetCurve::adjust in src/app/piano/key_offsets.cpp): straight lines
+    between the [velocity, offset] points, flat beyond them, rounded half away
+    from zero, within 1-127."""
+    if not points:
+        return velocity
+    if velocity <= points[0][0]:
+        offset = points[0][1]
+    elif velocity >= points[-1][0]:
+        offset = points[-1][1]
+    else:
+        i = next(i for i, p in enumerate(points) if p[0] >= velocity)
+        (v0, o0), (v1, o1) = points[i - 1], points[i]
+        span = v1 - v0
+        n = o0 * span + (o1 - o0) * (velocity - v0)
+        offset = (n + span // 2) // span if n >= 0 else -((-n + span // 2) // span)
+    return min(127, max(1, velocity + offset))
+
+
+def with_offsets(table: dict, offsets: dict) -> dict:
+    """The velocity table (its JSON) as the controller plays it with these
+    per-key offsets (Connection.offsets): each adjusted key's duties and
+    landing times at each velocity are the table's at the velocity it plays,
+    with the pedal up and, for a key with a "pedal" entry, down (from its own
+    pedal-down curve if it has one, else the pedal-up one)."""
+    if not offsets:
+        return table
+    table = copy.deepcopy(table)
+    shared = table.get("landing_ms")
+
+    def remap(entry: dict, points: list, landing_fallback) -> None:
+        played = [adjusted_velocity(points, v) for v in range(1, 128)]
+        entry["duty"] = [entry["duty"][p - 1] for p in played]
+        landing = entry.get("landing_ms") or landing_fallback
+        if landing:
+            entry["landing_ms"] = [landing[p - 1] for p in played]
+
+    for key, curves in offsets.items():
+        entry = table["keys"].get(str(key))
+        if entry is None:
+            continue  # not calibrated: the tools leave such keys alone
+        if curves.get("up"):
+            remap(entry, curves["up"], shared)
+        pedal_points = curves["pedal"] if curves.get("pedal") is not None else curves.get("up")
+        if "pedal" in entry and pedal_points:
+            remap(entry["pedal"], pedal_points, None)
+    return table
+
+
+def describe_offsets(offsets: dict) -> str:
+    """e.g. "keys 44 (up 64: -4), 50 (up 40: 0, 64: -6; pedal down 64: -2)"."""
+    def curve(points):
+        return ", ".join(f"{v}: {o:+d}" for v, o in points) or "none"
+    parts = []
+    for key in sorted(offsets, key=int):
+        c = offsets[key]
+        text = f"up {curve(c.get('up') or [])}"
+        if c.get("pedal") is not None:
+            text += f"; pedal down {curve(c['pedal'])}"
+        parts.append(f"{key} ({text})")
+    return "keys " + ", ".join(parts)
 
 
 def repeat_clamp(config: dict) -> tuple:

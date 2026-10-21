@@ -17,7 +17,8 @@ enum NoteChange : uint8_t
   NOTE_LENGTHENED = 8,       // held on until its hammer has landed
   NOTE_VELOCITY_LIMITED = 16, // the dynamics took it past 1-127
   NOTE_DUPLICATE = 32,        // the same note again at the same moment and velocity: played once
-  NOTE_REPEAT_BOOSTED = 64    // a repeat played louder (Dynamics::repeatBoost), so it can strike again sooner
+  NOTE_REPEAT_BOOSTED = 64,   // a repeat played louder (Dynamics::repeatBoost), so it can strike again sooner
+  NOTE_MUTED = 128            // its part is muted (Dynamics::mutedParts): not played
 };
 
 struct NoteReport

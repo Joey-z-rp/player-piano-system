@@ -1,68 +1,31 @@
 #include "app/piano/roll_builder.h"
 #include "app/piano/velocity_table.h"
 #include "app/piano/play_config.h"
+#include "roll_notes.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <new>
 
+using namespace roll_notes;
+
 namespace
 {
   const uint8_t LOWEST_PIANO_NOTE = 21; // A0
-  // The timing rules (how long notes are held, how soon a key can strike
-  // again, the pedal) come from a PlayConfig: see play_config.h.
-
-  // Whether a key can strike again intervalMs after the note before
-  // (velocity first) sounded, at velocity second.
-  bool canRepeat(const PlayConfig &config, uint8_t first, uint8_t second, int32_t intervalMs)
-  {
-    for (uint8_t i = 0; i < config.repeatLimitCount; i++)
-    {
-      const RepeatLimit &limit = config.repeatLimits[i];
-      if (second < limit.from)
-      {
-        continue;
-      }
-      bool afterLoud = first >= config.repeatLoudFrom;
-      if (intervalMs < (afterLoud ? limit.afterLoudMs : limit.afterSoftMs))
-      {
-        return false;
-      }
-      return afterLoud || second < config.deadZoneFromVelocity || second > config.deadZoneToVelocity ||
-             intervalMs < config.deadZoneFromMs || intervalMs >= config.deadZoneToMs;
-    }
-    return false;
-  }
-
   bool isPianoNote(uint8_t note)
   {
     return note >= LOWEST_PIANO_NOTE && note < LOWEST_PIANO_NOTE + PIANO_KEY_COUNT;
   }
 
-  struct Note
+  // A time in the MIDI, played at speed (percent of the written tempo).
+  uint32_t atSpeed(uint32_t ms, uint16_t speed)
   {
-    uint32_t onMs;
-    uint32_t offMs;
-    uint8_t key;
-    uint8_t velocity;   // 0 marks a note merged into an earlier one
-    uint16_t landingMs; // from the press until the hammer lands; 0 if unknown
-    // As written, for the report.
-    uint32_t writtenOnMs;
-    uint32_t writtenOffMs;
-    uint8_t writtenVelocity;
-    uint8_t changes;       // NoteChange flags
-    uint32_t mergedIntoMs; // merged notes: when the strike they're held in is written
-    bool pedal;            // the sustain pedal is down when it's written to sound
-    uint8_t part;          // see MidiEvent::part
-    bool repeat;           // struck within PlayConfig::repeatWindowMs of the last strike on its key
-  };
-
-  // A note-on at the same moment as another on its key, played as that one.
-  struct Doubled
-  {
-    Note note;
-    size_t original; // index in notes
-  };
+    if (speed == 100 || speed == 0)
+    {
+      return ms;
+    }
+    return (uint32_t)(((uint64_t)ms * 100 + speed / 2) / speed);
+  }
 
   // Pairs note-ons with note-offs and picks out sustain changes. A note-on
   // for a key that's still down ends the sounding note there; the new note
@@ -70,8 +33,9 @@ namespace
   // at the same moment as the sounding note (two voices sharing it, or a
   // duplicate in the file) is one strike, at the louder velocity; it goes in
   // doubled, for the report.
-  void collectNotesAndPedal(const std::vector<MidiEvent> &events, std::vector<Note> &notes,
-                            std::vector<RollEvent> &pedal, std::vector<Doubled> &doubled, PianoRoll &roll)
+  void collectNotesAndPedal(const std::vector<MidiEvent> &events, uint16_t speed, uint16_t mutedParts,
+                            std::vector<Note> &notes, std::vector<RollEvent> &pedal, std::vector<Doubled> &doubled,
+                            std::vector<Note> &muted, PianoRoll &roll)
   {
     const size_t NO_NOTE = SIZE_MAX;
     size_t soundingNote[PIANO_KEY_COUNT];
@@ -81,6 +45,7 @@ namespace
 
     for (const MidiEvent &event : events)
     {
+      uint32_t timeMs = atSpeed(event.timeMs, speed);
       switch (event.type)
       {
       case MidiEventType::NoteOn:
@@ -91,10 +56,17 @@ namespace
           break;
         }
         uint8_t key = event.note - LOWEST_PIANO_NOTE;
-        if (soundingNote[key] != NO_NOTE && notes[soundingNote[key]].writtenOnMs == event.timeMs)
+        if (event.part < 16 && (mutedParts >> event.part) & 1)
+        {
+          // Left out, for the report only: until its note-off (below).
+          muted.push_back({timeMs, UINT32_MAX, key, 0, 0, timeMs, UINT32_MAX, event.value, NOTE_MUTED, 0, false,
+                           event.part, false});
+          break;
+        }
+        if (soundingNote[key] != NO_NOTE && notes[soundingNote[key]].writtenOnMs == timeMs)
         {
           Note &first = notes[soundingNote[key]];
-          Note copy = {event.timeMs, UINT32_MAX, key, 0, 0, event.timeMs, 0, event.value, 0, event.timeMs, false,
+          Note copy = {timeMs, UINT32_MAX, key, 0, 0, timeMs, 0, event.value, 0, timeMs, false,
                        event.part, false};
           if (event.value == first.writtenVelocity)
           {
@@ -120,9 +92,9 @@ namespace
         }
         if (soundingNote[key] != NO_NOTE)
         {
-          notes[soundingNote[key]].offMs = event.timeMs;
+          notes[soundingNote[key]].offMs = timeMs;
         }
-        notes.push_back({event.timeMs, UINT32_MAX, key, event.value, 0, event.timeMs, 0, event.value, 0, 0, false,
+        notes.push_back({timeMs, UINT32_MAX, key, event.value, 0, timeMs, 0, event.value, 0, 0, false,
                          event.part, false});
         soundingNote[key] = notes.size() - 1;
         if (heldCount[key] < 255)
@@ -139,13 +111,25 @@ namespace
           break;
         }
         uint8_t key = event.note - LOWEST_PIANO_NOTE;
+        if (event.part < 16 && (mutedParts >> event.part) & 1)
+        {
+          for (Note &note : muted)
+          {
+            if (note.key == key && note.part == event.part && note.writtenOffMs == UINT32_MAX)
+            {
+              note.writtenOffMs = timeMs;
+              break;
+            }
+          }
+          break;
+        }
         if (heldCount[key] == 0)
         {
           break; // note-off without a matching note-on
         }
         if (--heldCount[key] == 0)
         {
-          notes[soundingNote[key]].offMs = event.timeMs;
+          notes[soundingNote[key]].offMs = timeMs;
           soundingNote[key] = NO_NOTE;
         }
         break;
@@ -157,7 +141,7 @@ namespace
         if (on != sustain)
         {
           sustain = on;
-          pedal.push_back({event.timeMs, on ? RollEventType::SustainOn : RollEventType::SustainOff, 0, 0, false, false});
+          pedal.push_back({timeMs, on ? RollEventType::SustainOn : RollEventType::SustainOff, 0, 0, false, false});
         }
         break;
       }
@@ -165,7 +149,12 @@ namespace
     }
 
     // Notes never turned off end with the file.
-    uint32_t endMs = events.empty() ? 0 : events.back().timeMs;
+    uint32_t endMs = events.empty() ? 0 : atSpeed(events.back().timeMs, speed);
+    for (Note &note : muted)
+    {
+      note.writtenOffMs = std::min(note.writtenOffMs, endMs);
+      note.offMs = note.writtenOffMs;
+    }
     for (Note &note : notes)
     {
       if (note.offMs == UINT32_MAX)
@@ -292,125 +281,6 @@ namespace
     }
   }
 
-  // When a note's hammer hits the string, on the roll's timeline.
-  uint32_t soundsMs(const Note &note)
-  {
-    return note.onMs + note.landingMs;
-  }
-
-  // Holds note in the strike kept until it ends. If note is louder, kept is
-  // struck at its velocity instead, and so re-timed for that hammer's landing
-  // to sound when the earlier of the two should. A louder hammer is faster, so
-  // that's no earlier than kept was pressed; with a table where it isn't, it's
-  // kept late enough for the strike before to be released first.
-  void mergeRepeat(Note &kept, Note &note, Note *before, const PlayConfig &config)
-  {
-    if (note.velocity > kept.velocity)
-    {
-      uint32_t sounds = std::min(soundsMs(kept), soundsMs(note));
-      uint32_t onMs = sounds - note.landingMs;
-      if (before != nullptr)
-      {
-        onMs = std::max(onMs, soundsMs(*before) + config.minNoteMs + 1);
-        before->offMs =
-            std::max(soundsMs(*before) + config.minNoteMs, std::min(before->offMs, onMs - config.restrikeGapMs));
-      }
-      kept.onMs = onMs;
-      kept.velocity = note.velocity;
-      kept.landingMs = note.landingMs;
-      kept.offMs = std::max(kept.offMs, soundsMs(kept) + config.minNoteMs);
-    }
-    kept.offMs = std::max(kept.offMs, note.offMs);
-    kept.changes |= NOTE_ABSORBED;
-    note.changes |= NOTE_MERGED;
-    note.mergedIntoMs = kept.writtenOnMs;
-    note.velocity = 0;
-  }
-
-  // A key can strike again once canRepeat allows it (how soon was measured on
-  // this piano, and depends mostly on how loud the repeat is). It's released
-  // restrikeGapMs before the next press where there's time, but never
-  // sooner than minNoteMs after its hammer lands: for a close repeat, that's
-  // as soon as it can be, giving the key the most time to come back up. A
-  // repeat that comes sooner than allowed can't be a new strike, so it's
-  // merged into the one before it: the key stays down until the later note
-  // ends, at the louder velocity, sounding when the first of them should. A
-  // fast run of repeats keeps its first onset and plays as many strikes as the
-  // key can manage; a grace note followed by a long note becomes one long note.
-  // Notes come in press order, so with landing times a soft note can come
-  // before a louder one written a little earlier (or at the same time, as when
-  // two voices share a note).
-  //
-  // With a boost, a repeat is played that many velocities louder (up to 127),
-  // when that lets it strike again where it otherwise couldn't, or anyway when
-  // it can: louder repeats can follow sooner, and a repeat starts from a key
-  // still moving, so it can come out softer. Its press is timed for the louder
-  // velocity's landing. A repeat that's merged isn't boosted.
-  void separateRepeats(std::vector<Note> &notes, PianoRoll &roll, const VelocityTable *timing, uint8_t boost,
-                       const PlayConfig &config)
-  {
-    std::stable_sort(notes.begin(), notes.end(), [](const Note &a, const Note &b)
-                     {
-    if (a.key != b.key)
-    {
-      return a.key < b.key;
-    }
-    return a.onMs < b.onMs; });
-
-    Note *kept = nullptr;
-    Note *before = nullptr; // the strike before kept on its key
-    for (Note &note : notes)
-    {
-      note.offMs = std::max(note.offMs, soundsMs(note) + config.minNoteMs);
-      if (kept != nullptr && kept->key == note.key)
-      {
-        int32_t interval = (int32_t)soundsMs(note) - (int32_t)soundsMs(*kept);
-        bool repeat = interval < (int32_t)config.repeatWindowMs;
-        uint32_t earliestRelease = soundsMs(*kept) + config.minNoteMs;
-        if (repeat && boost > 0 && note.velocity < 127)
-        {
-          // When the hammer lands at the louder velocity: the note sounds at
-          // the same moment, so it's pressed later.
-          uint8_t louder = (uint8_t)std::min<uint32_t>(note.velocity + boost, 127);
-          uint32_t landing = timing != nullptr && timing->hasLanding()
-                                 ? timing->landingMs(note.key, louder, note.pedal)
-                                 : note.landingMs;
-          uint32_t sounds = soundsMs(note);
-          uint32_t onMs = sounds - std::min(sounds, landing);
-          uint32_t pressMs = onMs - std::min<uint32_t>(onMs, config.repeatLateMs);
-          if (canRepeat(config, kept->velocity, louder, interval) && pressMs > earliestRelease)
-          {
-            note.velocity = louder;
-            note.landingMs = landing;
-            note.onMs = onMs;
-            note.changes |= NOTE_REPEAT_BOOSTED;
-          }
-        }
-        uint32_t pressMs = repeat ? note.onMs - std::min<uint32_t>(note.onMs, config.repeatLateMs) : note.onMs;
-        if (!canRepeat(config, kept->velocity, note.velocity, interval) || pressMs <= earliestRelease)
-        {
-          mergeRepeat(*kept, note, before, config);
-          roll.mergedNotes++;
-          continue;
-        }
-        if (repeat)
-        {
-          note.repeat = true;
-          note.landingMs += note.onMs - pressMs;
-          note.onMs = pressMs;
-          note.offMs = std::max(note.offMs, soundsMs(note) + config.minNoteMs);
-        }
-        kept->offMs = std::max(earliestRelease, std::min(kept->offMs, note.onMs - config.restrikeGapMs));
-        before = kept;
-      }
-      else
-      {
-        before = nullptr;
-      }
-      kept = &note;
-    }
-  }
-
   // The pedal solenoids need pedalMinMs between changes to finish moving.
   // Changes are checked against the last one kept, so delays never pile up:
   // - release then a quick re-press (a pedal change): the release stays on
@@ -455,10 +325,15 @@ namespace
 
   // Lengths are compared on the MIDI's timeline: a played note is released
   // lead after the MIDI, like everything else.
-  void reportNotes(const std::vector<Note> &notes, const std::vector<Doubled> &doubled, uint32_t lead,
-                   RollReport &report)
+  void reportNotes(const std::vector<Note> &notes, const std::vector<Doubled> &doubled,
+                   const std::vector<Note> &muted, uint32_t lead, RollReport &report)
   {
-    report.notes.reserve(notes.size() + doubled.size());
+    report.notes.reserve(notes.size() + doubled.size() + muted.size());
+    for (const Note &note : muted)
+    {
+      report.notes.push_back({note.writtenOnMs, note.writtenOffMs, 0, 0, 0, note.key, note.writtenVelocity, 0,
+                              note.part, note.changes});
+    }
     for (const Note &note : notes)
     {
       NoteReport out = {note.writtenOnMs, note.writtenOffMs, 0, 0, note.mergedIntoMs, note.key, note.writtenVelocity,
@@ -537,8 +412,9 @@ bool buildPianoRoll(const std::vector<MidiEvent> &events, PianoRoll &roll, const
     std::vector<Note> notes;
     std::vector<RollEvent> pedal;
     std::vector<Doubled> doubled;
-    collectNotesAndPedal(events, notes, pedal, doubled, roll);
-    uint32_t endMs = events.empty() ? 0 : events.back().timeMs;
+    std::vector<Note> muted;
+    collectNotesAndPedal(events, dynamics.speed, dynamics.mutedParts, notes, pedal, doubled, muted, roll);
+    uint32_t endMs = events.empty() ? 0 : atSpeed(events.back().timeMs, dynamics.speed);
     if (report != nullptr)
     {
       pedalSpans(pedal, 0, endMs, report->writtenPedal);
@@ -555,7 +431,7 @@ bool buildPianoRoll(const std::vector<MidiEvent> &events, PianoRoll &roll, const
     roll.events.insert(roll.events.end(), played.begin(), played.end());
     if (report != nullptr)
     {
-      reportNotes(notes, doubled, roll.leadMs, *report);
+      reportNotes(notes, doubled, muted, roll.leadMs, *report);
       pedalSpans(roll.events, roll.leadMs, endMs, report->playedPedal); // only the pedal is in there yet
     }
 

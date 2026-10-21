@@ -77,7 +77,28 @@ uint16_t VelocityTable::defaultDuty(uint8_t velocity)
   return DEFAULT_MIN_DUTY * 100 + (uint32_t)(velocity - 1) * (DEFAULT_MAX_DUTY - DEFAULT_MIN_DUTY) * 100 / (VELOCITY_LEVELS - 1);
 }
 
+void VelocityTable::setOffsets(std::shared_ptr<const KeyOffsets> offsets)
+{
+  std::atomic_store(&keyOffsets, std::move(offsets));
+}
+
+std::shared_ptr<const KeyOffsets> VelocityTable::offsets() const
+{
+  return std::atomic_load(&keyOffsets);
+}
+
+uint8_t VelocityTable::playedVelocity(uint8_t key, uint8_t velocity, bool pedal) const
+{
+  std::shared_ptr<const KeyOffsets> offsets = std::atomic_load(&keyOffsets);
+  return offsets == nullptr ? velocity : offsets->adjust(key, clampVelocity(velocity), pedal);
+}
+
 uint16_t VelocityTable::duty(uint8_t key, uint8_t velocity, bool pedal) const
+{
+  return tableDuty(key, playedVelocity(key, velocity, pedal), pedal);
+}
+
+uint16_t VelocityTable::tableDuty(uint8_t key, uint8_t velocity, bool pedal) const
 {
   if (!isCalibrated(key))
   {
@@ -124,6 +145,11 @@ bool VelocityTable::hasLanding() const
 
 uint16_t VelocityTable::landingMs(uint8_t key, uint8_t velocity, bool pedal) const
 {
+  return tableLandingMs(key, playedVelocity(key, velocity, pedal), pedal);
+}
+
+uint16_t VelocityTable::tableLandingMs(uint8_t key, uint8_t velocity, bool pedal) const
+{
   size_t index = clampVelocity(velocity) - 1;
   if (key < PIANO_KEY_COUNT && layer(key, pedal).keyHasLanding[key])
   {
@@ -141,7 +167,7 @@ uint16_t VelocityTable::maxLandingMs() const
     {
       for (bool pedal : {false, true})
       {
-        uint16_t ms = landingMs(key, velocity, pedal);
+        uint16_t ms = tableLandingMs(key, velocity, pedal);
         latest = ms > latest ? ms : latest;
       }
     }
@@ -169,10 +195,11 @@ void VelocityTable::formatDuty(char *text, size_t size, uint16_t duty)
 void VelocityTable::pressCommand(uint8_t key, uint8_t velocity, char *out, size_t size, bool pedal,
                                  const ClampSettings *repeatClamp) const
 {
-  uint16_t strikeDuty = duty(key, velocity, pedal);
+  velocity = playedVelocity(key, velocity, pedal); // once, for the duty and landing alike
+  uint16_t strikeDuty = tableDuty(key, velocity, pedal);
   char strike[8];
   formatDuty(strike, sizeof(strike), strikeDuty);
-  uint16_t landing = landingMs(key, velocity, pedal);
+  uint16_t landing = tableLandingMs(key, velocity, pedal);
   if (landing == 0)
   {
     snprintf(out, size, "P:%u:%s", key, strike);

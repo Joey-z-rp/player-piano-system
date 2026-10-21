@@ -4,14 +4,16 @@
 // the playhead while playing; when stopped it can be dragged, and a click
 // picks a point to play from.
 const noteView = (() => {
-  const MERGED = 1, ABSORBED = 2, SHORTENED = 4, LENGTHENED = 8, LIMITED = 16, DUPLICATE = 32, BOOSTED = 64;
+  const MERGED = 1, ABSORBED = 2, SHORTENED = 4, LENGTHENED = 8, LIMITED = 16, DUPLICATE = 32, BOOSTED = 64,
+    MUTED = 128;
   const KINDS = [
     { flag: MERGED, label: "merged" },
     { flag: SHORTENED, label: "shortened" },
     { flag: LENGTHENED, label: "lengthened" },
     { flag: LIMITED, label: "velocity limited" },
     { flag: DUPLICATE, label: "duplicates" },
-    { flag: BOOSTED, label: "repeats boosted" }
+    { flag: BOOSTED, label: "repeats boosted" },
+    { flag: MUTED, label: "muted" }
   ];
   // Velocity 1 to 127, light to dark, for played notes and changed ones.
   const RAMPS = {
@@ -63,6 +65,8 @@ const noteView = (() => {
   let hovered = null;
   let pickHandler = () => {};
   let loadedHandler = () => {};
+  let loadingHandler = () => {};
+  let loads = 0; // the latest load(): an earlier one that finishes after it is dropped
   // With more than one part (track), each note's outline shows which it's from.
   const PART_COLORS = ["#7a4fd0", "#1f9a6f", "#d0456f", "#b07d00", "#2f7fbf", "#8a5a2b"];
   let partCount = 0;
@@ -138,10 +142,19 @@ const noteView = (() => {
     for (const note of notes) {
       if (note.changes & DUPLICATE) continue; // drawn as the note it repeats
       const end = Math.max(note.writtenOff, note.playedOff) + shift;
-      const start = (note.changes & MERGED ? note.on : Math.min(note.on, note.playedOn)) + shift;
+      const start = (note.changes & (MERGED | MUTED) ? note.on : Math.min(note.on, note.playedOn)) + shift;
       if (start > viewEnd || end < viewStart) continue;
       const y = yOf(note.key, l);
       const x = xOf(note.on + shift, l);
+      if (note.changes & MUTED) {
+        // Left out: a faint dashed outline, as written.
+        ctx.setLineDash([3, 3]);
+        ctx.strokeStyle = "#a8a7a1";
+        ctx.lineWidth = 1;
+        ctx.strokeRect(x + 0.5, y + 0.5, Math.max(xOf(note.writtenOff + shift, l) - x - 1, 1), l.rowHeight - 1);
+        ctx.setLineDash([]);
+        continue;
+      }
       if (note.changes & MERGED) {
         ctx.fillStyle = COLORS.merged + "40";
         ctx.fillRect(x, y + 0.5, Math.max(xOf(note.writtenOff + shift, l) - x, 2), l.rowHeight - 1);
@@ -225,7 +238,7 @@ const noteView = (() => {
   // What happened to a note, in words.
   function describe(note) {
     const lines = [];
-    const velocity = note.changes & (MERGED | DUPLICATE) ? note.writtenVelocity
+    const velocity = note.changes & (MERGED | DUPLICATE | MUTED) ? note.writtenVelocity
       : note.writtenVelocity === note.playedVelocity ? note.playedVelocity
       : note.writtenVelocity + " → " + note.playedVelocity;
     const head = `${keyName(note.key)} at ${formatTime(note.on + lead())}, velocity ${velocity}`;
@@ -241,6 +254,9 @@ const noteView = (() => {
         lines.push(`Merged: written ${-gap} ms before another note on this key${strike ? ` (velocity ${strike.writtenVelocity})` : ""}, ` +
           "too close for two strikes, so they're struck once, at the louder velocity, when the first should sound.");
       }
+    }
+    if (note.changes & MUTED) {
+      lines.push("Muted: its track is left out, as if the file didn't have it.");
     }
     if (note.changes & BOOSTED) {
       lines.push(`Repeat played louder (the Repeats setting), at velocity ${note.playedVelocity}, so the key can ` +
@@ -413,11 +429,25 @@ const noteView = (() => {
         viewStart = -span * 0.25;
         selected = null;
       }
+      const before = data;
+      const load = ++loads;
+      loadingHandler(true);
+      let fetched;
       try {
         const response = await fetch("/api/piece/notes");
-        data = response.ok ? await response.json() : null;
+        fetched = response.ok ? await response.json() : null;
       } catch (error) {
-        data = null;
+        fetched = null;
+      }
+      if (load !== loads) return; // a newer load is under way
+      loadingHandler(false);
+      data = fetched;
+      // At a new speed, the view stays on the same point in the music.
+      if (!fromStart && before && data && before.speed && data.speed && before.speed !== data.speed) {
+        const moved = (ms) => (ms > data.leadMs ? data.leadMs + ((ms - data.leadMs) * before.speed) / data.speed : ms);
+        const middle = moved(viewStart + span / 2);
+        viewStart = middle - span / 2;
+        marker = moved(marker);
       }
       section.hidden = !data;
       if (!data) {
@@ -463,6 +493,10 @@ const noteView = (() => {
       pickHandler = handler;
     },
     // Called with every note (as load gives them) each time they're loaded, or null.
+    // handler(true) when it starts building the notes, (false) when they're in.
+    onLoading(handler) {
+      loadingHandler = handler;
+    },
     onLoaded(handler) {
       loadedHandler = handler;
     },

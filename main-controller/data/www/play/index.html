@@ -14,15 +14,72 @@
   .dyn label { width: 5.5em; }
   .dyn input, .part input { width: 12rem; flex: none; }
   .dyn output, .part output { width: 3.5em; font-variant-numeric: tabular-nums; }
+  @media (max-width: 600px) {
+    /* The slider takes what's left of the row, and the hint goes under it. */
+    .dyn { flex-wrap: wrap; row-gap: 0; }
+    .dyn input { flex: 1; width: auto; min-width: 0; }
+    .dyn .hint { flex-basis: 100%; margin-left: calc(5.5em + 8px); }
+    .repeat-note { margin-left: 0; }
+  }
   .hint { color: #5f5e5a; font-size: 13px; }
+  /* Messages float at the bottom, so they're seen wherever the page is scrolled. */
+  #message { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); z-index: 10; margin: 0;
+    max-width: min(36rem, calc(100vw - 32px)); box-sizing: border-box; padding: 10px 16px; border-radius: 8px;
+    background: #1d1c1a; color: #fff; font-size: 14px; box-shadow: 0 4px 16px rgba(0, 0, 0, .25); cursor: pointer; }
+  #message.error { background: #b3261e; color: #fff; font-weight: normal; }
   #message:empty { display: none; }
-  #message.error { color: #b3261e; font-weight: 600; }
+  .now { margin: 4px 0 12px; }
+  .now-name { font-size: 22px; font-weight: 600; line-height: 1.25; overflow-wrap: anywhere; }
+  .now-meta { font-size: 14px; color: #5f5e5a; margin-top: 2px; }
+  .dyn-note { margin: 0 0 6px; }
+  .heat { font-size: 13px; color: #5f5e5a; margin: -8px 0 12px; }
+  .heat[hidden] { display: none; }
+  .heat.warm { color: #8a4b00; }
+  .heat.hot { color: #b3261e; font-weight: 600; font-size: 14px; }
+  .library { margin: 8px 0 16px; max-width: 48rem; }
+  .library-head { display: flex; align-items: baseline; gap: 12px; }
+  .library h2 { font-size: 18px; margin: 0; }
+  .library-tools { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 8px 0; }
+  .library-tools .add { display: flex; align-items: center; gap: 6px; font-size: 14px; }
+  .library-tools .add input { flex: none; font-size: 13px; max-width: 15rem; }
+  #library-search { flex: 1 1 10rem; min-width: 8rem; font: 15px sans-serif; }
+  .pieces { list-style: none; margin: 0; padding: 0; max-height: 17rem; overflow-y: auto;
+    border: 1px solid #e1e0d9; border-radius: 6px; }
+  .pieces:empty { display: none; }
+  .pieces li { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-top: 1px solid #efeee9; }
+  .pieces li:first-child { border-top: none; }
+  .pieces li.loaded { background: #eef4fc; }
+  .piece-text { flex: 1; min-width: 0; }
+  .piece-name { font-size: 15px; cursor: text; overflow-wrap: anywhere; }
+  .piece-name:hover { text-decoration: underline dotted #8a8984; }
+  .piece-name input { font: 15px sans-serif; width: 100%; box-sizing: border-box; }
+  .piece-meta { font-size: 12px; color: #5f5e5a; }
+  .piece-badge { font-size: 11px; color: #1b4f9c; border: 1px solid #93bdf2; border-radius: 8px; padding: 0 6px; margin-left: 6px; }
+  .pieces button, .pieces a.button { font-size: 13px; }
+  .pieces a.button { color: inherit; text-decoration: none; border: 1px solid #c9c8c1; border-radius: 3px; padding: 1px 6px; background: #f6f6f3; }
+  .library-empty { font-size: 14px; color: #5f5e5a; margin: 4px 0; }
+  .busy { color: #5f5e5a; font-size: 14px; margin-left: 8px; white-space: nowrap; }
+  .busy[hidden] { display: none; }
+  .busy::before { content: ""; display: inline-block; width: 10px; height: 10px; margin-right: 6px;
+    border: 2px solid #c9c8c1; border-top-color: #2a78d6; border-radius: 50%; vertical-align: -1px;
+    animation: spin .8s linear infinite; }
+  .notes-busy { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    background: rgba(255, 255, 255, .65); }
+  .notes-busy[hidden] { display: none; }
+  .notes-busy .busy { background: #fff; border: 1px solid #e1e0d9; border-radius: 6px; padding: 6px 12px;
+    margin: 0; box-shadow: 0 2px 8px rgba(0, 0, 0, .12); }
+  .notes-busy .busy::before { width: 14px; height: 14px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
   .parts[hidden] { display: none; }
   .parts-title { margin: 10px 0 4px; }
   .part { display: flex; align-items: center; gap: 8px; margin: 4px 0; font-size: 14px; }
   .part .swatch { border: 2px solid; width: 14px; height: 10px; }
   .part-name { flex: 1; min-width: 0; }
   .part input { width: 10rem; }
+  .part.muted .part-name, .part.muted output { color: #a8a7a1; text-decoration: line-through; }
+  .part .mute { font-size: 13px; min-width: 4.5em; }
+  .part .mute[aria-pressed="true"] { background: #fbe3e1; border-color: #d08f89; }
+  .swatch.muted-note { border: 1.5px dashed #a8a7a1; }
   .velocity-low { font-size: 13px; color: #8a4b00; margin: 2px 0; }
   .repeat-note { font-size: 13px; color: #5f5e5a; margin: 2px 0 6px 6.5em; min-height: 1.2em; }
   .swatch.ramp { width: 48px; background: linear-gradient(to right, #dce9fb, #93bdf2, #3d86dc, #1b4f9c, #0b2552); }
@@ -49,9 +106,28 @@
 </head>
 <body>
 <h1>Play</h1>
-<p><input id="file" type="file" accept=".mid,.midi,audio/midi"></p>
+<section class="library" id="library">
+  <div class="library-head">
+    <h2>Library</h2>
+    <span class="hint" id="library-usage"></span>
+  </div>
+  <div class="library-tools">
+    <label class="add">Add a piece <input id="file" type="file" accept=".mid,.midi,audio/midi"></label>
+    <input type="search" id="library-search" placeholder="Search" aria-label="Search the library">
+    <select id="library-sort" aria-label="Sort by">
+      <option value="played">Last played</option>
+      <option value="added">Recently added</option>
+      <option value="name">Name</option>
+    </select>
+  </div>
+  <ul class="pieces" id="pieces"></ul>
+</section>
 <p id="message"></p>
-<p id="piece">No piece loaded</p>
+<div class="now">
+  <div class="now-name" id="piece">No piece loaded</div>
+  <div class="now-meta"><span id="piece-meta"></span> <span class="busy" id="busy" hidden></span></div>
+</div>
+<p class="heat" id="heat" hidden></p>
 <p>
   <button id="play" disabled>Play</button>
   <button id="pause" disabled>Pause</button>
@@ -64,8 +140,10 @@
     <span><i class="swatch written"></i>as written</span>
     <span><i class="swatch changed"></i>changed</span>
     <span><i class="swatch merged"></i>merged (not struck)</span>
+    <span><i class="swatch muted-note"></i>muted</span>
   </div>
-  <div class="chart"><canvas id="notes-canvas"></canvas><div class="tip" id="notes-tip" hidden></div></div>
+  <div class="chart"><canvas id="notes-canvas"></canvas><div class="tip" id="notes-tip" hidden></div>
+    <div class="notes-busy" id="notes-busy" hidden><span class="busy"></span></div></div>
   <div class="tools">
     <button id="zoom-out" aria-label="Zoom out">−</button>
     <button id="zoom-in" aria-label="Zoom in">+</button>
@@ -77,6 +155,13 @@
   <p class="change-text" id="change-text"></p>
 </section>
 <section class="dynamics">
+  <p class="hint dyn-note">These are remembered for each piece: loading a piece brings back its own.</p>
+  <div class="dyn">
+    <label for="speed">Speed</label>
+    <input id="speed" type="range" min="50" max="150" step="1" value="100">
+    <output id="speed-value" for="speed">100%</output>
+    <span class="hint">of the written tempo</span>
+  </div>
   <div class="dyn">
     <label for="volume">Volume</label>
     <input id="volume" type="range" min="10" max="200" step="5" value="100">
@@ -103,7 +188,7 @@
   </div>
   <p class="repeat-note" id="repeat-note"></p>
   <div class="parts" id="parts" hidden>
-    <div class="parts-title">Tracks <span class="hint">velocities added to each track's notes, for this piece</span></div>
+    <div class="parts-title">Tracks <span class="hint">velocities added to each track's notes, or leave it out</span></div>
     <div id="parts-list"></div>
   </div>
   <p><button id="dynamics-reset">Reset</button> <span id="volume-note"></span></p>
@@ -118,6 +203,8 @@
   <p class="velocity-low" id="velocity-low"></p>
 </section>
 <script src="/play/notes.js"></script>
+<script src="/play/velocities.js"></script>
+<script src="/play/library.js"></script>
 <script src="/play/app.js"></script>
 </body>
 </html>

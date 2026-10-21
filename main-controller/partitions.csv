@@ -1,0 +1,17 @@
+# Name,   Type, SubType, Offset,   Size,     Flags
+# nvs and otadata stay where they were in default_16MB.csv (the framework
+# always writes otadata's first contents at 0xe000), so nvs can't grow: it
+# keeps Wi-Fi's and the radio's data, and the controller's settings have
+# their own 64 KB "settings" partition. Two 2 MB firmware slots (one for
+# over-the-air updates); the piece library, which uploadfs never touches;
+# then 1 MB for the web files and velocity table.
+# "spiffs" must stay the LAST spiffs-type partition here: uploadfs writes its
+# image to the last one it finds (fetch_fs_size in PlatformIO's builder).
+nvs,      data, nvs,      0x9000,   0x5000,
+otadata,  data, ota,      0xe000,   0x2000,
+app0,     app,  ota_0,    0x10000,  0x200000,
+app1,     app,  ota_1,    0x210000, 0x200000,
+settings, data, nvs,      0x410000, 0x10000,
+library,  data, spiffs,   0x420000, 0xAD0000,
+spiffs,   data, spiffs,   0xEF0000, 0x100000,
+coredump, data, coredump, 0xFF0000, 0x10000,

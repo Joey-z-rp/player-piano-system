@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include <LittleFS.h>
 #include <string>
+#include "app/library/piece_library.h"
 #include "app/piano/piano_controller.h"
 #include "app/piano/velocity_table.h"
 #include "led_control.h"
@@ -13,6 +14,7 @@ LedControl ledControl;
 Rs485Module rs485;
 VelocityTable velocityTable;
 PianoController piano;
+PieceLibrary library;
 SerialCommands serialCommands;
 WiFiStationModule wifiStation;
 WebServerModule webServer;
@@ -78,6 +80,7 @@ void setup()
     return;
   }
   serialCommands.begin(&piano);
+  library.begin();
 
   Serial.println("Initializing WiFi Station...");
   if (!wifiStation.init())
@@ -86,7 +89,10 @@ void setup()
     return;
   }
 
-  if (!webServer.begin(piano))
+  // The clock, for when pieces were added and played (UTC; the page shows local time).
+  configTime(0, 0, "pool.ntp.org", "time.google.com");
+
+  if (!webServer.begin(piano, library))
   {
     Serial.println("Failed to start web server");
     return;

@@ -6,6 +6,7 @@
 #include <stdint.h>
 #include <string>
 #include "app/piano/piano_roll.h"
+#include "app/piano/key_offsets.h"
 #include "app/piano/play_config.h"
 
 static const uint8_t VELOCITY_LEVELS = 127; // MIDI velocities 1-127
@@ -79,10 +80,20 @@ public:
   bool load(const char *json, size_t length, std::string &error);
 
   // Each of these takes whether the pedal is down: with it down, a key with a
-  // "pedal" entry plays from that, and any other key as with it up.
+  // "pedal" entry plays from that, and any other key as with it up. Lookups
+  // by velocity play the key's offset one (see setOffsets).
+
+  // The per-key offsets (key_offsets.h) every lookup by velocity goes
+  // through; null for none. Safe to swap while others read.
+  void setOffsets(std::shared_ptr<const KeyOffsets> offsets);
+  std::shared_ptr<const KeyOffsets> offsets() const;
+  // The velocity the key plays for this one, with its offset.
+  uint8_t playedVelocity(uint8_t key, uint8_t velocity, bool pedal = false) const;
 
   // In hundredths of a percent.
   uint16_t duty(uint8_t key, uint8_t velocity, bool pedal = false) const;
+  // As the table has it, without the key's offset.
+  uint16_t tableDuty(uint8_t key, uint8_t velocity, bool pedal = false) const;
   bool isCalibrated(uint8_t key) const;
   size_t calibratedKeys() const;
   // Whether the key has a "pedal" entry.
@@ -95,7 +106,10 @@ public:
   // key's own, else the shared curve's, else 0 (unknown). With the pedal
   // down, a key with a "pedal" entry has only that entry's.
   uint16_t landingMs(uint8_t key, uint8_t velocity, bool pedal = false) const;
-  // The latest landing of any key at any velocity, either way.
+  // As the table has it, without the key's offset.
+  uint16_t tableLandingMs(uint8_t key, uint8_t velocity, bool pedal = false) const;
+  // The latest landing of any key at any velocity, either way (in the table:
+  // offsets only pick other velocities' times).
   uint16_t maxLandingMs() const;
 
   // How presses are driven: the table's "drive", or the defaults.
@@ -154,6 +168,7 @@ private:
   uint16_t sharedLanding[VELOCITY_LEVELS];
   bool hasSharedLanding;
   DriveSettings driveSettings;
+  std::shared_ptr<const KeyOffsets> keyOffsets;
 };
 
 #endif // VELOCITY_TABLE_H

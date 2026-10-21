@@ -1,52 +1,27 @@
 #include "app/piano/piano_controller.h"
 #include "app/piano/roll_builder.h"
 #include "app/piano/velocity_table.h"
-#include <Preferences.h>
 #include "rs485.h"
 #include <esp_timer.h>
 #include <freertos/task.h>
 
 static const uint32_t PLAYER_TASK_STACK = 8192; // rebuilds a piece for new dynamics
-static const char SETTINGS_NAMESPACE[] = "piano";
-static const char VOLUME_KEY[] = "volume";
-static const char CONTRAST_KEY[] = "contrast";
-static const char VOICING_KEY[] = "voicing";
-static const char REPEAT_BOOST_KEY[] = "repeatBoost";
-static const char CONFIG_KEY[] = "playConfig";
 static const UBaseType_t PLAYER_TASK_PRIORITY = 3; // above loop()
 static const BaseType_t PLAYER_TASK_CORE = 1;      // Wi-Fi runs on core 0
 
 PianoController::PianoController()
     : rs485(nullptr), velocityTable(nullptr), messageQueue(nullptr), state(PlaybackState::Idle),
-      volumePercent(DEFAULT_VOLUME), contrastPercent(100), voicingPercent(100), repeatBoost(0), partOffsets(), configVersion(1), playStartMs(0),
+      volumePercent(DEFAULT_VOLUME), contrastPercent(100), voicingPercent(100), repeatBoost(0), partOffsets(), speedPercent(100), mutedParts(0), rebuilding(false), testing(false), configVersion(1), playStartMs(0),
       pausedAtMs(0),
       nextEvent(0), startUs(0), nextSkipped(0)
 {
 }
 
-bool PianoController::init(Rs485Module *rs485, const VelocityTable *velocityTable)
+bool PianoController::init(Rs485Module *rs485, VelocityTable *velocityTable)
 {
   this->rs485 = rs485;
   this->velocityTable = velocityTable;
-  Preferences settings;
-  if (settings.begin(SETTINGS_NAMESPACE, true))
-  {
-    uint16_t saved = settings.getUShort(VOLUME_KEY, DEFAULT_VOLUME);
-    volumePercent = (saved >= MIN_VOLUME && saved <= MAX_VOLUME) ? saved : DEFAULT_VOLUME;
-    saved = settings.getUShort(CONTRAST_KEY, 100);
-    contrastPercent = (saved >= MIN_CONTRAST && saved <= MAX_CONTRAST) ? saved : 100;
-    saved = settings.getUShort(VOICING_KEY, 100);
-    voicingPercent = (saved >= MIN_VOICING && saved <= MAX_VOICING) ? saved : 100;
-    saved = settings.getUShort(REPEAT_BOOST_KEY, 0);
-    repeatBoost = saved <= MAX_REPEAT_BOOST ? saved : 0;
-    String savedConfig = settings.getString(CONFIG_KEY, "");
-    settings.end();
-    std::string error;
-    if (savedConfig.length() > 0 && !readPlayConfig(savedConfig.c_str(), savedConfig.length(), config, error))
-    {
-      Serial.printf("Saved play config not used (%s): using the defaults\n", error.c_str());
-    }
-  }
+  loadSettings();
   messageQueue = xQueueCreate(DRIVER_COMMAND_QUEUE_LENGTH, sizeof(Message));
   if (messageQueue == nullptr)
   {
@@ -81,10 +56,18 @@ PlaybackResult PianoController::loadRoll(std::shared_ptr<const PianoRoll> roll)
   {
     offset = 0; // a new piece starts with its parts as written
   }
+  // A new piece starts from the defaults (piece_loader.cpp then gives a
+  // library piece its own settings).
+  volumePercent = DEFAULT_VOLUME;
+  contrastPercent = 100;
+  voicingPercent = 100;
+  repeatBoost = 0;
+  speedPercent = 100;
+  mutedParts = 0;
   return PlaybackResult::Ok;
 }
 
-PlaybackResult PianoController::play(uint32_t fromMs)
+PlaybackResult PianoController::play(uint32_t fromMs, uint16_t atSpeed)
 {
   {
     std::lock_guard<std::mutex> lock(rollMutex);
@@ -97,17 +80,42 @@ PlaybackResult PianoController::play(uint32_t fromMs)
   {
     return PlaybackResult::Busy;
   }
+  if (tooHotToPlay())
+  {
+    return PlaybackResult::TooHot;
+  }
 
   Message message;
   message.type = MessageType::Play;
   message.timeMs = fromMs;
+  message.atSpeed = atSpeed;
+  message.text[0] = '\0';
+  return post(message) ? PlaybackResult::Ok : PlaybackResult::QueueFull;
+}
+
+PlaybackResult PianoController::playTest(std::shared_ptr<const PianoRoll> roll)
+{
+  if (state != PlaybackState::Idle && !testing)
+  {
+    return PlaybackResult::Busy;
+  }
+  if (tooHotToPlay())
+  {
+    return PlaybackResult::TooHot;
+  }
+  {
+    std::lock_guard<std::mutex> lock(rollMutex);
+    testRoll = roll;
+  }
+  Message message;
+  message.type = MessageType::PlayTest;
   message.text[0] = '\0';
   return post(message) ? PlaybackResult::Ok : PlaybackResult::QueueFull;
 }
 
 PlaybackResult PianoController::pause()
 {
-  if (state != PlaybackState::Playing)
+  if (state != PlaybackState::Playing || testing)
   {
     return PlaybackResult::NotPlaying;
   }
@@ -117,15 +125,16 @@ PlaybackResult PianoController::pause()
   return post(message) ? PlaybackResult::Ok : PlaybackResult::QueueFull;
 }
 
-PlaybackResult PianoController::seek(uint32_t toMs)
+PlaybackResult PianoController::seek(uint32_t toMs, uint16_t atSpeed)
 {
-  if (state == PlaybackState::Idle)
+  if (state == PlaybackState::Idle || testing)
   {
     return PlaybackResult::NotPlaying;
   }
   Message message;
   message.type = MessageType::Seek;
   message.timeMs = toMs;
+  message.atSpeed = atSpeed;
   message.text[0] = '\0';
   return post(message) ? PlaybackResult::Ok : PlaybackResult::QueueFull;
 }
@@ -158,6 +167,7 @@ PlaybackStatus PianoController::status() const
 {
   PlaybackStatus result;
   result.state = state;
+  result.testing = testing;
   // Before playStartMs while the pedal settles at a start part way through.
   int32_t positionMs = (int32_t)(millis() - playStartMs);
   switch (result.state)
@@ -176,148 +186,14 @@ PlaybackStatus PianoController::status() const
   return result;
 }
 
+bool PianoController::building() const
+{
+  return rebuilding;
+}
+
 const VelocityTable *PianoController::velocities() const
 {
   return velocityTable;
-}
-
-bool PianoController::setVolume(uint16_t percent)
-{
-  if (percent < MIN_VOLUME || percent > MAX_VOLUME)
-  {
-    return false;
-  }
-  volumePercent = percent;
-  Preferences settings;
-  if (settings.begin(SETTINGS_NAMESPACE, false))
-  {
-    settings.putUShort(VOLUME_KEY, percent);
-    settings.end();
-  }
-  return true;
-}
-
-uint16_t PianoController::volume() const
-{
-  return volumePercent;
-}
-
-static void saveSetting(const char *key, uint16_t value)
-{
-  Preferences settings;
-  if (settings.begin(SETTINGS_NAMESPACE, false))
-  {
-    settings.putUShort(key, value);
-    settings.end();
-  }
-}
-
-bool PianoController::setContrast(uint16_t percent)
-{
-  if (percent < MIN_CONTRAST || percent > MAX_CONTRAST)
-  {
-    return false;
-  }
-  contrastPercent = percent;
-  saveSetting(CONTRAST_KEY, percent);
-  return true;
-}
-
-bool PianoController::setVoicing(uint16_t percent)
-{
-  if (percent < MIN_VOICING || percent > MAX_VOICING)
-  {
-    return false;
-  }
-  voicingPercent = percent;
-  saveSetting(VOICING_KEY, percent);
-  return true;
-}
-
-bool PianoController::setRepeatBoost(uint8_t velocities)
-{
-  if (velocities > MAX_REPEAT_BOOST)
-  {
-    return false;
-  }
-  repeatBoost = velocities;
-  saveSetting(REPEAT_BOOST_KEY, velocities);
-  return true;
-}
-
-bool PianoController::setPartOffset(uint8_t part, int8_t velocities)
-{
-  if (part >= MAX_MIDI_PARTS || velocities < -MAX_PART_OFFSET || velocities > MAX_PART_OFFSET)
-  {
-    return false;
-  }
-  partOffsets[part] = velocities;
-  return true;
-}
-
-PlayConfig PianoController::playConfig() const
-{
-  std::lock_guard<std::mutex> lock(configMutex);
-  return config;
-}
-
-uint32_t PianoController::playConfigVersion() const
-{
-  return configVersion;
-}
-
-void PianoController::saveConfig(const PlayConfig &saved)
-{
-  Preferences settings;
-  if (settings.begin(SETTINGS_NAMESPACE, false))
-  {
-    settings.putString(CONFIG_KEY, playConfigJson(saved).c_str());
-    settings.end();
-  }
-}
-
-bool PianoController::setPlayConfig(const char *json, size_t length, std::string &error)
-{
-  std::lock_guard<std::mutex> lock(configMutex);
-  PlayConfig next = config;
-  if (!readPlayConfig(json, length, next, error))
-  {
-    return false;
-  }
-  if (next != config)
-  {
-    config = next;
-    configVersion++;
-    saveConfig(next);
-  }
-  return true;
-}
-
-void PianoController::resetPlayConfig()
-{
-  std::lock_guard<std::mutex> lock(configMutex);
-  config = PlayConfig();
-  configVersion++;
-  Preferences settings;
-  if (settings.begin(SETTINGS_NAMESPACE, false))
-  {
-    settings.remove(CONFIG_KEY);
-    settings.end();
-  }
-}
-
-Dynamics PianoController::dynamics() const
-{
-  Dynamics now;
-  now.volume = volumePercent;
-  now.contrast = contrastPercent;
-  now.voicing = voicingPercent;
-  now.repeatBoost = repeatBoost;
-  for (uint8_t part = 0; part < MAX_MIDI_PARTS; part++)
-  {
-    now.partOffset[part] = partOffsets[part];
-  }
-  return now;
 }
 
 size_t PianoController::pendingCommands() const
@@ -353,10 +229,19 @@ void PianoController::run()
       wait = remainingUs <= 0 ? 0 : pdMS_TO_TICKS((remainingUs + 999) / 1000);
     }
 
+    if (wait > pdMS_TO_TICKS(HEAT_TICK_MS))
+    {
+      wait = pdMS_TO_TICKS(HEAT_TICK_MS); // the heat is watched even when idle
+    }
+
     Message message;
     if (xQueueReceive(messageQueue, &message, wait) == pdTRUE)
     {
       handleMessage(message);
+    }
+    if (millis() - heatCheckedMs >= HEAT_TICK_MS)
+    {
+      watchHeat();
     }
   }
 }
@@ -374,32 +259,57 @@ void PianoController::handleMessage(const Message &message)
   case MessageType::Play:
     if (state == PlaybackState::Idle)
     {
-      startPlayback(message.timeMs == CONTINUE ? 0 : message.timeMs);
+      startPlayback(message.timeMs == CONTINUE ? 0 : message.timeMs, message.atSpeed);
     }
     else if (state == PlaybackState::Paused)
     {
-      resumePlayback(message.timeMs == CONTINUE ? (uint32_t)pausedAtMs : message.timeMs);
+      bool fromPause = message.timeMs == CONTINUE;
+      resumePlayback(fromPause ? (uint32_t)pausedAtMs : message.timeMs, fromPause ? 0 : message.atSpeed);
     }
     break;
   case MessageType::Pause:
     if (state == PlaybackState::Playing)
     {
-      int64_t elapsedUs = esp_timer_get_time() - startUs;
-      pausedAtMs = elapsedUs > 0 ? (uint32_t)(elapsedUs / 1000) : 0;
-      releaseAll();
-      state = PlaybackState::Paused;
-      Serial.printf("Paused at %u ms\n", (uint32_t)pausedAtMs);
+      pausePlayback();
+    }
+    break;
+  case MessageType::PlayTest:
+  {
+    std::shared_ptr<const PianoRoll> roll;
+    {
+      std::lock_guard<std::mutex> lock(rollMutex);
+      roll.swap(testRoll);
+    }
+    if (roll == nullptr || roll->events.empty() || (state != PlaybackState::Idle && !testing))
+    {
+      break;
+    }
+    if (testing)
+    {
+      finishPlayback(); // the one before: every key up first
+    }
+    playingConfig = playConfig();
+    playingRoll = roll;
+    testing = true;
+    state = PlaybackState::Playing;
+    playFrom(0);
+    break;
+  }
+  case MessageType::Rebuild:
+    if (state != PlaybackState::Playing)
+    {
+      rebuildIfSpeedChanged();
     }
     break;
   case MessageType::Seek:
     if (state == PlaybackState::Playing)
     {
       releaseAll();
-      playFrom(message.timeMs);
+      playFrom(toLoadedSpeed(message.timeMs, message.atSpeed));
     }
     else if (state == PlaybackState::Paused)
     {
-      pausedAtMs = message.timeMs;
+      pausedAtMs = toLoadedSpeed(message.timeMs, message.atSpeed);
     }
     break;
   case MessageType::Stop:
@@ -428,6 +338,16 @@ void PianoController::handleMessage(const Message &message)
   }
 }
 
+void PianoController::pausePlayback()
+{
+  int64_t elapsedUs = esp_timer_get_time() - startUs;
+  pausedAtMs = elapsedUs > 0 ? (uint32_t)(elapsedUs / 1000) : 0;
+  releaseAll();
+  state = PlaybackState::Paused;
+  Serial.printf("Paused at %u ms\n", (uint32_t)pausedAtMs);
+  rebuildIfSpeedChanged();
+}
+
 // The drivers come back with every output off.
 void PianoController::restartDrivers()
 {
@@ -438,7 +358,27 @@ void PianoController::restartDrivers()
 
 // Builds the loaded piece again if the dynamics or the play config have
 // changed since it was built, from the MIDI it came from.
-void PianoController::rebuildForDynamics()
+// While nothing is playing, a new speed is built in at once, so the piece's
+// length, the paused position and the note view all agree with it.
+void PianoController::rebuildIfSpeedChanged()
+{
+  std::shared_ptr<const PianoRoll> loaded;
+  {
+    std::lock_guard<std::mutex> lock(rollMutex);
+    loaded = loadedRoll;
+  }
+  if (loaded != nullptr && loaded->dynamics.speed != speedPercent)
+  {
+    uint32_t position = pausedAtMs;
+    rebuildForDynamics(&position);
+    if (state == PlaybackState::Paused)
+    {
+      pausedAtMs = position;
+    }
+  }
+}
+
+void PianoController::rebuildForDynamics(uint32_t *positionMs)
 {
   std::shared_ptr<const PianoRoll> loaded;
   {
@@ -455,27 +395,65 @@ void PianoController::rebuildForDynamics()
   PlayConfig rules = playConfig();
   std::shared_ptr<PianoRoll> rebuilt = std::make_shared<PianoRoll>();
   rebuilt->configVersion = version;
-  if (!buildPianoRoll(*loaded->source, *rebuilt, velocityTable, now, nullptr, &rules))
+  rebuilding = true;
+  bool built = buildPianoRoll(*loaded->source, *rebuilt, velocityTable, now, nullptr, &rules);
+  rebuilding = false;
+  if (!built)
   {
     Serial.println("Out of memory rebuilding for the new dynamics: playing as before");
     return;
   }
   rebuilt->title = loaded->title;
+  rebuilt->id = loaded->id;
+  rebuilt->libraryId = loaded->libraryId;
   rebuilt->source = loaded->source;
   rebuilt->partNames = loaded->partNames;
-  std::lock_guard<std::mutex> lock(rollMutex);
-  if (loadedRoll == loaded) // not replaced by an upload meanwhile
   {
+    std::lock_guard<std::mutex> lock(rollMutex);
+    if (loadedRoll != loaded) // replaced by an upload meanwhile
+    {
+      return;
+    }
     loadedRoll = rebuilt;
   }
-  Serial.printf("Rebuilt \"%s\" for volume %u%%, contrast %u%%, voicing %u%%, repeats +%u\n", rebuilt->title.c_str(),
-                now.volume, now.contrast, now.voicing, now.repeatBoost);
+  if (positionMs != nullptr)
+  {
+    *positionMs = toLoadedSpeed(*positionMs, loaded->dynamics.speed);
+  }
+  Serial.printf("Rebuilt \"%s\" for volume %u%%, contrast %u%%, voicing %u%%, repeats +%u, speed %u%%\n",
+                rebuilt->title.c_str(), now.volume, now.contrast, now.voicing, now.repeatBoost, now.speed);
 }
 
-void PianoController::startPlayback(uint32_t fromMs)
+// A position read from the piece when it was built at atSpeed, moved to the
+// same point in the loaded piece (0: already in it).
+uint32_t PianoController::toLoadedSpeed(uint32_t ms, uint16_t atSpeed) const
 {
-  rebuildForDynamics();
+  std::shared_ptr<const PianoRoll> loaded;
+  {
+    std::lock_guard<std::mutex> lock(rollMutex);
+    loaded = loadedRoll;
+  }
+  if (loaded == nullptr || atSpeed == 0 || atSpeed == loaded->dynamics.speed || ms <= loaded->leadMs)
+  {
+    return ms;
+  }
+  uint64_t intoPiece = ms - loaded->leadMs;
+  return loaded->leadMs + (uint32_t)((intoPiece * atSpeed + loaded->dynamics.speed / 2) / loaded->dynamics.speed);
+}
+
+void PianoController::startPlayback(uint32_t fromMs, uint16_t atSpeed)
+{
+  if (atSpeed == 0)
+  {
+    rebuildForDynamics(&fromMs);
+  }
+  else
+  {
+    rebuildForDynamics();
+    fromMs = toLoadedSpeed(fromMs, atSpeed);
+  }
   playingConfig = playConfig();
+  clearHeatAction();
   restartDrivers();
 
   // Take the roll and mark it playing under one lock, so loadRoll() can't
@@ -496,10 +474,19 @@ void PianoController::startPlayback(uint32_t fromMs)
 
 // Goes on from a pause, with the piece rebuilt if the dynamics have changed.
 // Every key is already up.
-void PianoController::resumePlayback(uint32_t fromMs)
+void PianoController::resumePlayback(uint32_t fromMs, uint16_t atSpeed)
 {
-  rebuildForDynamics();
+  if (atSpeed == 0)
+  {
+    rebuildForDynamics(&fromMs);
+  }
+  else
+  {
+    rebuildForDynamics();
+    fromMs = toLoadedSpeed(fromMs, atSpeed);
+  }
   playingConfig = playConfig();
+  clearHeatAction();
   {
     std::lock_guard<std::mutex> lock(rollMutex);
     if (loadedRoll == nullptr)
@@ -561,6 +548,7 @@ void PianoController::finishPlayback()
   bool completed = nextEvent >= playingRoll->events.size();
   Serial.printf("Playback %s\n", completed ? "finished" : "stopped");
   playingRoll.reset();
+  testing = false;
   state = PlaybackState::Idle;
 }
 
@@ -620,6 +608,8 @@ bool PianoController::send(const char *command)
     Serial.printf("RS485 send failed: %s\n", command);
     return false;
   }
+  std::lock_guard<std::mutex> lock(heatMutex);
+  heat.command(command, millis()); // what the solenoid's now doing, for its heat
   return true;
 }
 

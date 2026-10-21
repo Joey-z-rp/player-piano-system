@@ -12,22 +12,98 @@
 
 <section>
   <h2>Keys</h2>
-  <p class="hint">Click a key to strike it with the duty and hold below.</p>
+  <p class="hint" id="mode-hint"></p>
   <div class="keyboard-scroll">
     <div class="keyboard" id="keyboard" role="group" aria-label="Keyboard"></div>
   </div>
   <div class="row">
+    <span class="modes" role="radiogroup" aria-label="Play by">
+      <label><input type="radio" name="mode" value="velocity"> Velocity</label>
+      <label><input type="radio" name="mode" value="duty"> Duty</label>
+    </span>
     <label>Key <select id="key"></select></label>
+  </div>
+  <div class="row">
+    <span class="modes" role="radiogroup" aria-label="Clicking a key">
+      <label><input type="radio" name="style" value="press"> Hold while pressed</label>
+      <label><input type="radio" name="style" value="strike"> Strike for the hold time</label>
+    </span>
+  </div>
+  <div class="row" id="velocity-row">
+    <label>Velocity
+      <input type="range" id="velocity-range" min="1" max="127" step="1">
+      <input type="number" id="velocity" min="1" max="127" step="1" class="short"></label>
+    <label><input type="checkbox" id="pedal"> Pedal down</label>
+  </div>
+  <div class="row" id="duty-row">
     <label>Duty
       <input type="range" id="duty-range" min="0" max="100" step="0.25">
       <input type="number" id="duty" min="0" max="100" step="0.25" class="short">%</label>
+  </div>
+  <div class="row">
     <label>Hold <input type="number" id="hold" min="20" max="5000" step="10" class="short"> ms</label>
+  </div>
+  <div class="key-info" id="key-info">
+    <div class="curve" id="curve"></div>
+    <div class="facts" id="facts"></div>
+  </div>
+  <div class="offsets" id="offsets" hidden>
+    <h3 id="offsets-title">Offsets</h3>
+    <p class="hint" id="offsets-hint"></p>
+    <label class="own" id="own-pedal-row"><input type="checkbox" id="own-pedal"> Its own offsets with the pedal down</label>
+    <div id="offsets-edit">
+      <table class="points">
+        <thead><tr><th>from velocity</th><th>offset</th><th></th></tr></thead>
+        <tbody id="points"></tbody>
+      </table>
+      <div class="row">
+        <button type="button" id="add-point">Add a point</button>
+        <button type="button" id="save-offsets">Save</button>
+        <button type="button" id="clear-offsets">No offsets for this key</button>
+        <span id="offsets-message"></span>
+      </div>
+    </div>
+    <p class="adjusted" id="adjusted-keys"></p>
   </div>
   <div class="row">
     <button type="button" id="strike">Strike</button>
     <button type="button" id="press">Press</button>
     <button type="button" id="release">Release</button>
   </div>
+</section>
+
+<section id="by-ear">
+  <h2>Listen</h2>
+  <p class="hint">Played as a piece plays them, by velocity from the table, with the hold and pedal above. They don't
+    touch the loaded piece.</p>
+  <div class="test">
+    <h3>Velocity steps on the key</h3>
+    <div class="row">
+      <label>Velocities <input id="ramp-velocities" class="wide"></label>
+      <label>Every <input type="number" id="ramp-gap" min="100" max="5000" step="50" class="short"> ms</label>
+      <button type="button" id="ramp">Play</button>
+    </div>
+  </div>
+  <div class="test">
+    <h3>The velocity across keys</h3>
+    <div class="row">
+      <label>From <select id="range-from"></select></label>
+      <label>to <select id="range-to"></select></label>
+      <label>Every <input type="number" id="range-gap" min="100" max="5000" step="50" class="short"> ms</label>
+      <button type="button" id="range">Play</button>
+    </div>
+  </div>
+  <div class="test">
+    <h3>A repeat on the key</h3>
+    <div class="row">
+      <label>First <input type="number" id="repeat-first" min="1" max="127" class="short"></label>
+      <label>then <input type="number" id="repeat-second" min="1" max="127" class="short"></label>
+      <label><input type="number" id="repeat-interval" min="20" max="1000" step="5" class="short"> ms later</label>
+      <button type="button" id="repeat">Play</button>
+    </div>
+    <p class="hint" id="repeat-result"></p>
+  </div>
+  <div class="row"><button type="button" id="stop">Stop</button></div>
 </section>
 
 <section>
@@ -59,5 +135,7 @@
 <pre id="log"></pre>
 
 <script src="/test/app.js"></script>
+<script src="/test/key-info.js"></script>
+<script src="/test/listen.js"></script>
 </body>
 </html>

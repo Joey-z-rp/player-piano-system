@@ -155,6 +155,68 @@ void test_repeat_is_sent_early_and_marked()
   TEST_ASSERT_TRUE(roll.events[2].repeat);
 }
 
+// The speed scales the piece's times; the piano's own limits stay in real ms.
+void test_speed_scales_the_written_times()
+{
+  Dynamics slower;
+  slower.speed = 50;
+  TEST_ASSERT_TRUE(buildPianoRoll({on(0, C4), off(500, C4), on(520, C4), off(800, C4)}, roll, nullptr, slower));
+  // 520 ms becomes 1040: released the usual 70 ms before it strikes again.
+  assertRoll({{0, PRESS, C4_KEY, 64}, {970, RELEASE, C4_KEY, 0}, {1040, PRESS, C4_KEY, 64}, {1600, RELEASE, C4_KEY, 0}});
+  TEST_ASSERT_EQUAL_UINT32(1600, roll.durationMs);
+  TEST_ASSERT_EQUAL_UINT16(50, roll.dynamics.speed);
+}
+
+void test_faster_speed_can_merge_a_repeat()
+{
+  std::vector<MidiEvent> events = {on(0, C4), off(100, C4), on(160, C4), off(400, C4)};
+  TEST_ASSERT_TRUE(buildPianoRoll(events, roll, nullptr, Dynamics()));
+  TEST_ASSERT_EQUAL_UINT32(0, roll.mergedNotes); // 160 ms: time enough at velocity 64
+  Dynamics faster;
+  faster.speed = 150;
+  TEST_ASSERT_TRUE(buildPianoRoll(events, roll, nullptr, faster));
+  TEST_ASSERT_EQUAL_UINT32(1, roll.mergedNotes); // 107 ms: too soon
+}
+
+// A muted part is left out as if the file didn't have it, but reported.
+static MidiEvent partOn(uint8_t part, uint32_t timeMs, uint8_t note, uint8_t velocity = 64)
+{
+  return {timeMs, MidiEventType::NoteOn, note, velocity, part};
+}
+
+static MidiEvent partOff(uint8_t part, uint32_t timeMs, uint8_t note)
+{
+  return {timeMs, MidiEventType::NoteOff, note, 0, part};
+}
+
+void test_muted_parts_are_left_out_but_reported()
+{
+  Dynamics dynamics;
+  dynamics.mutedParts = 1 << 1; // part 1
+  RollReport mutedReport;
+  TEST_ASSERT_TRUE(buildPianoRoll({partOn(0, 0, C4), partOn(1, 0, D4, 90), partOff(0, 500, C4), partOff(1, 600, D4)}, roll,
+                                  nullptr, dynamics, &mutedReport));
+  assertRoll({{0, PRESS, C4_KEY, 64}, {500, RELEASE, C4_KEY, 0}});
+  TEST_ASSERT_EQUAL_UINT32(1, roll.noteCount);
+  TEST_ASSERT_EQUAL_UINT32(2, mutedReport.notes.size());
+  const NoteReport &muted = mutedReport.notes[0].key == D4_KEY ? mutedReport.notes[0] : mutedReport.notes[1];
+  TEST_ASSERT_EQUAL_UINT8(NOTE_MUTED, muted.changes);
+  TEST_ASSERT_EQUAL_UINT32(600, muted.writtenOffMs);
+  TEST_ASSERT_EQUAL_UINT8(0, muted.playedVelocity);
+}
+
+void test_a_muted_part_doesnt_crowd_the_others_on_a_key()
+{
+  // Part 1 strikes C4 100 ms before part 0 does: with part 1 muted, part 0's
+  // note plays as written, not merged into it.
+  Dynamics dynamics;
+  dynamics.mutedParts = 1 << 1;
+  TEST_ASSERT_TRUE(buildPianoRoll({partOn(1, 0, C4), partOff(1, 90, C4), partOn(0, 100, C4), partOff(0, 400, C4)}, roll,
+                                  nullptr, dynamics));
+  assertRoll({{100, PRESS, C4_KEY, 64}, {400, RELEASE, C4_KEY, 0}});
+  TEST_ASSERT_EQUAL_UINT32(0, roll.mergedNotes);
+}
+
 void test_strike_long_after_the_last_is_not_a_repeat()
 {
   build({on(0, C4), off(100, C4), on(300, C4), off(400, C4)});
@@ -784,6 +846,10 @@ int main()
   RUN_TEST(test_repeat_with_short_gap_is_released_earlier);
   RUN_TEST(test_repeat_with_no_gap_is_released_earlier);
   RUN_TEST(test_repeat_is_sent_early_and_marked);
+  RUN_TEST(test_speed_scales_the_written_times);
+  RUN_TEST(test_faster_speed_can_merge_a_repeat);
+  RUN_TEST(test_muted_parts_are_left_out_but_reported);
+  RUN_TEST(test_a_muted_part_doesnt_crowd_the_others_on_a_key);
   RUN_TEST(test_strike_long_after_the_last_is_not_a_repeat);
   RUN_TEST(test_repeat_limits_follow_the_repeats_velocity);
   RUN_TEST(test_repeats_around_88_skip_their_dead_zone);

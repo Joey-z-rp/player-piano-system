@@ -98,6 +98,7 @@ class Table:
         if not path.exists():
             sys.exit(f"{path} not found: run `calibrate_dynamics.py table` first")
         document = json.loads(path.read_text())
+        self.document = document
         self.entries = {int(k): v for k, v in document["keys"].items()}
         self.keys = {k: v["duty"] for k, v in self.entries.items()}
         self.shared_landing = document.get("landing_ms")
@@ -119,6 +120,16 @@ class Table:
         print(
             f"Table {path.name} ({len(self.keys)} keys, {landing}; settings {self.settings})"
         )
+
+    def apply_offsets(self, offsets: dict) -> None:
+        """Plays the keys as the controller does with its per-key offsets
+        (Connection.offsets; see common.with_offsets)."""
+        if not offsets:
+            return
+        document = common.with_offsets(self.document, offsets)
+        self.entries = {int(k): v for k, v in document["keys"].items()}
+        self.keys = {k: v["duty"] for k, v in self.entries.items()}
+        print(f"With the controller's key offsets: {common.describe_offsets(offsets)}")
 
     def entry(self, key: int) -> dict:
         """The key's table entry, or with the pedal down its "pedal" entry if it has one."""
@@ -449,6 +460,7 @@ def main() -> None:
         )
     )
     player = Player(args)
+    table.apply_offsets(player.piano.offsets())
     try:
         args.run(args, table, player)
         print("\nDone.")

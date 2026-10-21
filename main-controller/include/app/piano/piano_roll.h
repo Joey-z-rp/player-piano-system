@@ -38,11 +38,19 @@ struct Dynamics
   uint16_t voicing = 100;  // percent: within each chord, velocities stretched away from the chord's average
   int8_t partOffset[MAX_MIDI_PARTS] = {}; // velocities added to each part's notes (see MidiEvent::part)
   uint8_t repeatBoost = 0; // velocities added to a repeat, so it can strike again sooner (and isn't quieter)
+  // Percent of the written tempo: the MIDI's times are scaled by 100/speed
+  // before anything else, so the piano's own limits (repeats, landing, the
+  // pedal) stay in real ms.
+  uint16_t speed = 100;
+  // Parts left out (bit n: MidiEvent::part n), as if the file didn't have
+  // them: they don't sound, and don't shape or crowd the rest.
+  uint16_t mutedParts = 0;
 
   bool operator==(const Dynamics &other) const
   {
     return volume == other.volume && contrast == other.contrast && voicing == other.voicing &&
-           repeatBoost == other.repeatBoost && std::equal(partOffset, partOffset + MAX_MIDI_PARTS, other.partOffset);
+           repeatBoost == other.repeatBoost && speed == other.speed &&
+           mutedParts == other.mutedParts && std::equal(partOffset, partOffset + MAX_MIDI_PARTS, other.partOffset);
   }
   bool operator!=(const Dynamics &other) const
   {
@@ -53,6 +61,8 @@ struct Dynamics
 struct PianoRoll
 {
   std::string title;
+  uint32_t id = 0;               // the upload it came from: kept when it's rebuilt
+  std::string libraryId;         // its PieceInfo::id in the library, if it's saved there
   std::vector<RollEvent> events; // sorted by timeMs
   uint32_t durationMs = 0;
   uint32_t noteCount = 0;

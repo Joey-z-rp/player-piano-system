@@ -1,6 +1,10 @@
 #include "web/web_server.h"
 #include "web/api_config.h"
 #include "web/api_driver.h"
+#include "web/api_dynamics.h"
+#include "web/api_piece.h"
+#include "web/api_library.h"
+#include "web/api_offsets.h"
 #include "web/api_playback.h"
 #include "web/api_response.h"
 #include "web/api_status.h"
@@ -10,7 +14,7 @@ WebServerModule::WebServerModule() : server(80)
 {
 }
 
-bool WebServerModule::begin(PianoController &piano)
+bool WebServerModule::begin(PianoController &piano, PieceLibrary &library)
 {
   if (!LittleFS.begin(true))
   {
@@ -19,8 +23,12 @@ bool WebServerModule::begin(PianoController &piano)
   }
 
   registerConfigRoutes(server, piano);
+  registerOffsetRoutes(server, piano);
   registerDriverRoutes(server, piano);
-  registerPlaybackRoutes(server, piano);
+  registerPlaybackRoutes(server, piano, library);
+  registerLibraryRoutes(server, piano, library);
+  registerPieceRoutes(server, piano);
+  registerDynamicsRoutes(server, piano, library);
   registerStatusRoutes(server, piano);
 
   // Each page is a folder under data/www/ with its own index.html,

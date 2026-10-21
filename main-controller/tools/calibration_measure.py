@@ -406,6 +406,9 @@ def check(args) -> None:
           f"roughly {strikes * (4.5 if args.pedal else 3) / 60:.0f} minutes")
 
     piano = connect(args)
+    # What the controller plays: a key with an offset is checked at the duty
+    # it plays, against its own curve there.
+    table.apply_offsets(piano.offsets())
     recorder = Recorder(args.device, args.sample_rate)
     timed = TimedRecorder(args.device, args.sample_rate)
     sos = a_weighting(args.sample_rate)

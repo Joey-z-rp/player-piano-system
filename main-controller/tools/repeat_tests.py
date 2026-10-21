@@ -253,6 +253,7 @@ def repeat_key(key: int, table: dict, ctx, args) -> tuple[list[dict], list[np.nd
 def measure(args) -> None:
     table = json.loads(common.TABLE_FILE.read_text())
     piano = common.connect(args)
+    table = common.with_offsets(table, piano.offsets())  # as the controller plays the keys
     if args.clamp_repeats and args.repeat_clamp is None:
         args.repeat_clamp = common.repeat_clamp(piano.config())  # as the controller plays repeats
     # How the results are filed: each way of playing the repeats apart.
