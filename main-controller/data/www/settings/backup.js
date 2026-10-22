@@ -1,7 +1,8 @@
-// Backs up what the controller keeps (config, key offsets, sliders, library)
+// Backs up what the piano keeps (the playing rules, key offsets, the library)
 // as a zip made here in the browser, and restores one through the same API
 // the other pages use. settings.json holds the settings and the library's
 // list (each piece's "file" in the zip); pieces/<name>.mid each piece's file.
+(() => {
 const $ = (id) => document.getElementById(id);
 const FORMAT = "player-piano-backup";
 const mb = (bytes) => (bytes < 1048576 ? Math.ceil(bytes / 1024) + " KB" : (bytes / 1048576).toFixed(1) + " MB");
@@ -19,27 +20,13 @@ function fileNames(pieces) {
   });
 }
 
-async function getJson(url) {
-  const response = await fetch(url);
-  const body = await response.json();
-  if (!response.ok) throw new Error(`${url}: ${body.error || response.status}`);
-  return body;
-}
+const getJson = (url) => ui.api(url);
+const postJson = (url, body) => ui.api(url, { json: body });
 
-async function postJson(url, body) {
-  const response = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  const reply = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(reply.error || `${url}: ${response.status}`);
-  return reply;
-}
-
-function say(element, text, error = false) {
-  element.textContent = text;
-  element.className = error ? "error" : "";
+// A busy line (spinner and text) shown while text is set.
+function say(element, text) {
+  element.hidden = !text;
+  element.querySelector("span:last-child").textContent = text;
 }
 
 // ---- back up ----
@@ -53,9 +40,9 @@ async function showLibrarySize() {
   }
 }
 
-$("backup").addEventListener("click", async () => {
+$("backup-button").addEventListener("click", async () => {
   const status = $("backup-status");
-  $("backup").disabled = true;
+  $("backup-button").disabled = true;
   try {
     say(status, "Reading the settings…");
     const [config, offsets, library] = await Promise.all([
@@ -88,12 +75,14 @@ $("backup").addEventListener("click", async () => {
     link.click();
     link.remove();
     setTimeout(() => URL.revokeObjectURL(link.href), 10000);
-    say(status, `Saved ${link.download} (${mb(blob.size)})` +
+    say(status, "");
+    ui.toast(`Saved ${link.download} (${mb(blob.size)})` +
       ($("with-pieces").checked ? `, with ${files.length - 1} pieces` : ", without the pieces"));
   } catch (error) {
-    say(status, "Backup failed: " + error.message, true);
+    say(status, "");
+    ui.toast("Backup failed: " + error.message, { error: true });
   }
-  $("backup").disabled = false;
+  $("backup-button").disabled = false;
 });
 
 // ---- restore ----
@@ -113,18 +102,19 @@ $("restore-file").addEventListener("change", async () => {
     if (settings.format !== FORMAT) throw new Error("it isn't a backup from this page");
     backup = { settings, files };
   } catch (error) {
-    $("restore-log").textContent = `Can't restore ${file.name}: ${error.message}`;
+    ui.toast(`Can't restore ${file.name}: ${error.message}`, { error: true });
+    $("restore-file").value = "";
     return;
   }
   const s = backup.settings;
   const keys = Object.keys(s.offsets?.keys || {}).length;
   const pieces = (s.library || []).filter((p) => backup.files[pieceFile(p)]);
-  $("restore-made").textContent = `Made ${new Date(s.made).toLocaleString()}.`;
+  $("restore-made").textContent = `${file.name}, made ${new Date(s.made).toLocaleString()}. Choose what to restore:`;
   $("restore-offsets-hint").textContent = keys
-    ? `${keys} ${keys === 1 ? "key" : "keys"} with offsets: replaces the current ones`
+    ? `${keys} ${keys === 1 ? "key" : "keys"}: replaces the current ones`
     : "none in this backup: restoring clears the current ones";
   $("restore-library-hint").textContent = pieces.length
-    ? `${pieces.length} pieces: added to the library; one already there gets the backup's name and settings`
+    ? `${pieces.length} pieces, added (one already there gets the backup's name and settings)`
     : "no pieces in this backup";
   $("restore-library").checked = pieces.length > 0;
   $("restore-library").disabled = pieces.length === 0;
@@ -140,11 +130,11 @@ function note(line) {
   $("restore-log").scrollTop = $("restore-log").scrollHeight;
 }
 
-$("restore").addEventListener("click", async () => {
+$("restore-button").addEventListener("click", async () => {
   if (!backup) return;
   const s = backup.settings;
   const status = $("restore-status");
-  $("restore").disabled = true;
+  $("restore-button").disabled = true;
   $("restore-log").textContent = "";
   let problems = 0;
   const step = async (label, action) => {
@@ -180,10 +170,12 @@ $("restore").addEventListener("click", async () => {
       });
     }
   }
-  say(status, problems ? `Done, with ${problems} ${problems === 1 ? "problem" : "problems"} (see below)` : "Restored.",
-    problems > 0);
-  $("restore").disabled = false;
+  say(status, "");
+  ui.toast(problems ? `Restored, with ${problems} ${problems === 1 ? "problem" : "problems"}: see the log below` : "Restored",
+    { error: problems > 0 });
+  $("restore-button").disabled = false;
   showLibrarySize();
 });
 
 showLibrarySize();
+})();

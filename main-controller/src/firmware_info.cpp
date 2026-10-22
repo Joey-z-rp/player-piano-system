@@ -28,17 +28,29 @@ const char *firmwareSlot()
   return running != nullptr ? running->label : "?";
 }
 
+// Read from flash once (reading it pauses both cores' caches for a moment,
+// and the status asks often); they only change when the firmware is kept.
+static int onTrial = -1, rolledBack = -1;
+
 bool firmwareOnTrial()
 {
-  esp_ota_img_states_t state;
-  const esp_partition_t *running = esp_ota_get_running_partition();
-  return running != nullptr && esp_ota_get_state_partition(running, &state) == ESP_OK &&
-         state == ESP_OTA_IMG_PENDING_VERIFY;
+  if (onTrial < 0)
+  {
+    esp_ota_img_states_t state;
+    const esp_partition_t *running = esp_ota_get_running_partition();
+    onTrial = running != nullptr && esp_ota_get_state_partition(running, &state) == ESP_OK &&
+              state == ESP_OTA_IMG_PENDING_VERIFY;
+  }
+  return onTrial == 1;
 }
 
 bool firmwareRolledBack()
 {
-  return esp_ota_get_last_invalid_partition() != nullptr;
+  if (rolledBack < 0)
+  {
+    rolledBack = esp_ota_get_last_invalid_partition() != nullptr;
+  }
+  return rolledBack == 1;
 }
 
 void firmwareIsGood()
@@ -46,6 +58,7 @@ void firmwareIsGood()
   if (firmwareOnTrial())
   {
     esp_ota_mark_app_valid_cancel_rollback();
+    onTrial = 0;
     Serial.println("Firmware update kept: it's on Wi-Fi with the web server up");
   }
 }

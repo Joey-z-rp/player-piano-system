@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Keys · Player piano</title>
+<meta name="theme-color" content="#f6f5f1" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#121212" media="(prefers-color-scheme: dark)">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Piano">
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/assets/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/assets/icon-180.png">
+<script>try { var t = localStorage.getItem("theme"); if (t) document.documentElement.dataset.theme = t; } catch (e) {}</script>
+<link rel="stylesheet" href="/assets/app.css">
+<link rel="stylesheet" href="/keys/keys.css">
+</head>
+<body data-section="keys">
+<main class="page">
+  <div class="page-head">
+    <div>
+      <h1>Keys</h1>
+      <p id="mode-hint"></p>
+    </div>
+  </div>
+
+  <!-- The keyboard -->
+  <section class="card keyboard-card">
+    <div class="keyboard-tools">
+      <div class="segmented" role="radiogroup" aria-label="Play by">
+        <label><input type="radio" name="mode" value="velocity"><span>Velocity</span></label>
+        <label><input type="radio" name="mode" value="duty"><span>Duty</span></label>
+      </div>
+      <div class="segmented" role="radiogroup" aria-label="Pressing a key">
+        <label><input type="radio" name="style" value="press"><span>Hold while pressed</span></label>
+        <label><input type="radio" name="style" value="strike"><span>Strike</span></label>
+      </div>
+      <span class="spacer"></span>
+      <div class="segmented" role="radiogroup" aria-label="Keys shown">
+        <label><input type="radio" name="zoom" value="all"><span>88 keys</span></label>
+        <label><input type="radio" name="zoom" value="4"><span>4 oct</span></label>
+        <label><input type="radio" name="zoom" value="2"><span>2 oct</span></label>
+      </div>
+    </div>
+    <div class="keyboard-scroll" id="keyboard-scroll">
+      <div class="keyboard" id="keyboard" role="group" aria-label="Keyboard"></div>
+    </div>
+  </section>
+
+  <div class="keys-grid">
+    <div class="keys-col">
+      <!-- How a key is played -->
+      <section class="card">
+        <div class="card-head"><h2>Play</h2><span class="spacer"></span>
+          <label class="field-inline small muted" for="key">Key</label>
+          <select class="input input-sm key-select" id="key"></select>
+        </div>
+        <div id="velocity-row">
+          <div class="slider-row">
+            <label for="velocity-range">Velocity</label>
+            <input class="input input-sm num" type="number" id="velocity" min="1" max="127" step="1" aria-label="Velocity">
+            <input type="range" id="velocity-range" min="1" max="127" step="1">
+          </div>
+          <label class="switch"><input type="checkbox" id="pedal"> Sustain pedal down</label>
+        </div>
+        <div id="duty-row">
+          <div class="slider-row">
+            <label for="duty-range">Duty</label>
+            <span class="row"><input class="input input-sm num" type="number" id="duty" min="0" max="100" step="0.25" aria-label="Duty"><span class="small muted">%</span></span>
+            <input type="range" id="duty-range" min="0" max="100" step="0.25">
+          </div>
+        </div>
+        <div class="row hold-row">
+          <label class="small muted" for="hold">Strike for</label>
+          <input class="input input-sm num" type="number" id="hold" min="20" max="5000" step="10">
+          <span class="small muted">ms</span>
+          <span class="spacer"></span>
+          <button class="btn btn-primary btn-sm" type="button" id="strike">Strike</button>
+          <button class="btn btn-sm" type="button" id="press">Press</button>
+          <button class="btn btn-sm" type="button" id="release">Release</button>
+        </div>
+      </section>
+
+      <!-- What the table does with it -->
+      <section class="card" id="key-info">
+        <div class="card-head"><h2>How it's played</h2></div>
+        <div class="curve chart" id="curve"></div>
+        <div class="facts small" id="facts"></div>
+      </section>
+    </div>
+
+    <div class="keys-col">
+      <!-- Its offsets -->
+      <section class="card" id="offsets" hidden>
+        <div class="card-head"><h2 id="offsets-title">Offsets</h2></div>
+        <p class="small muted" id="offsets-hint"></p>
+        <label class="switch small own" id="own-pedal-row"><input type="checkbox" id="own-pedal"> Its own offsets with the pedal down</label>
+        <div id="offsets-edit">
+          <table class="points">
+            <thead><tr><th>From velocity</th><th>Offset</th><th></th></tr></thead>
+            <tbody id="points"></tbody>
+          </table>
+          <div class="row">
+            <button class="btn btn-sm" type="button" id="add-point">Add a point</button>
+            <span class="spacer"></span>
+            <button class="btn btn-ghost btn-sm" type="button" id="clear-offsets">No offsets</button>
+            <button class="btn btn-primary btn-sm" type="button" id="save-offsets">Save</button>
+          </div>
+          <p class="small" id="offsets-message"></p>
+        </div>
+        <div class="adjusted small" id="adjusted-keys"></div>
+      </section>
+
+      <!-- Listening -->
+      <section class="card" id="by-ear">
+        <div class="card-head"><h2>Listen</h2><span class="spacer"></span>
+          <button class="btn btn-sm" type="button" id="stop">Stop</button>
+          <p>Played as a piece plays them, by velocity from the table, with the pedal setting above.</p>
+        </div>
+        <div class="test">
+          <h3>Velocity steps on the key</h3>
+          <div class="test-fields">
+            <label class="field"><span class="field-label">Velocities</span><input class="input input-sm" id="ramp-velocities"></label>
+            <label class="field narrow"><span class="field-label">Every (ms)</span><input class="input input-sm" type="number" id="ramp-gap" min="100" max="5000" step="50"></label>
+            <button class="btn btn-sm" type="button" id="ramp">Play</button>
+          </div>
+        </div>
+        <div class="test">
+          <h3>The velocity across keys</h3>
+          <div class="test-fields">
+            <label class="field"><span class="field-label">From</span><select class="input input-sm" id="range-from"></select></label>
+            <label class="field"><span class="field-label">To</span><select class="input input-sm" id="range-to"></select></label>
+            <label class="field narrow"><span class="field-label">Every (ms)</span><input class="input input-sm" type="number" id="range-gap" min="100" max="5000" step="50"></label>
+            <button class="btn btn-sm" type="button" id="range">Play</button>
+          </div>
+        </div>
+        <div class="test">
+          <h3>A repeat on the key</h3>
+          <div class="test-fields">
+            <label class="field narrow"><span class="field-label">First</span><input class="input input-sm" type="number" id="repeat-first" min="1" max="127"></label>
+            <label class="field narrow"><span class="field-label">Then</span><input class="input input-sm" type="number" id="repeat-second" min="1" max="127"></label>
+            <label class="field narrow"><span class="field-label">After (ms)</span><input class="input input-sm" type="number" id="repeat-interval" min="20" max="1000" step="5"></label>
+            <button class="btn btn-sm" type="button" id="repeat">Play</button>
+          </div>
+          <p class="small muted" id="repeat-result"></p>
+        </div>
+      </section>
+
+      <details class="card">
+        <summary>Advanced <span class="summary-note">pedal, drivers and raw commands</span></summary>
+        <div class="card-body stack">
+          <div class="row">
+            <span class="small muted label-w">Sustain pedal</span>
+            <button class="btn btn-sm" type="button" id="pedal-press">Press</button>
+            <button class="btn btn-sm" type="button" id="pedal-release">Release</button>
+          </div>
+          <div class="row">
+            <span class="small muted label-w">Everything</span>
+            <button class="btn btn-sm" type="button" id="release-all">Release all keys</button>
+            <button class="btn btn-sm" type="button" id="reset">Restart drivers</button>
+          </div>
+          <form class="row command-form" id="form">
+            <input class="input input-sm mono" id="command" placeholder="P:20:60.25" autocomplete="off" aria-label="Driver command">
+            <button class="btn btn-sm" type="submit">Send</button>
+          </form>
+          <div class="history" id="history"></div>
+        </div>
+      </details>
+
+      <details class="card">
+        <summary>Log <span class="summary-note">what was sent</span></summary>
+        <div class="card-body"><pre class="log" id="log"></pre></div>
+      </details>
+    </div>
+  </div>
+</main>
+<script src="/assets/app.js"></script>
+<script src="/keys/app.js"></script>
+<script src="/keys/key-info.js"></script>
+<script src="/keys/listen.js"></script>
+</body>
+</html>

@@ -1,6 +1,6 @@
 // What the velocity table does with the selected key (its duty curve, landing,
 // clamp and the command it sends), and its offsets editor. Uses the helpers
-// and settings in app.js.
+// and settings in app.js, and ui (/assets/app.js).
 // ---- what the table does with the key ----
 let keyInfo = null;
 let infoRequest = 0;
@@ -90,21 +90,16 @@ function showAdjustedKeys() {
   keys.forEach((key) => keyboard.querySelector(`[data-key="${key}"]`)?.classList.add("adjusted"));
   const box = $("adjusted-keys");
   if (!keys.length) {
-    box.textContent = "No key has offsets.";
+    box.textContent = "No key has offsets yet: keys with them get an orange dot on the keyboard.";
     return;
   }
-  box.replaceChildren("Keys with offsets: ", ...keys.flatMap((key, i) => {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.textContent = noteName(key) + (allOffsets[key].pedal ? " (own pedal-down)" : "");
-    button.addEventListener("click", () => selectKey(key));
-    return i ? [" ", button] : [button];
-  }), " ");
-  const clear = document.createElement("button");
-  clear.type = "button";
-  clear.textContent = "Clear all";
+  box.replaceChildren("Keys with offsets:", ...keys.map((key) => ui.el("button", { class: "btn btn-sm", type: "button",
+    onclick: () => selectKey(key) }, noteName(key) + (allOffsets[key].pedal ? " (own pedal-down)" : ""))));
+  const clear = ui.el("button", { class: "btn btn-ghost btn-sm danger-text", type: "button" }, "Clear all");
   clear.addEventListener("click", async () => {
-    if (!confirm("Remove the offsets from every key?")) return;
+    const sure = await ui.confirm({ title: "Clear every key's offsets?", message: "Every key goes back to playing as the velocity table says.",
+      confirm: "Clear all", danger: true });
+    if (!sure) return;
     if (await post("/api/offsets/clear", undefined, "every key's offsets cleared")) {
       draft = null;
       await loadOffsets();
@@ -124,6 +119,7 @@ function pointRow(point) {
   point.forEach((value, i) => {
     const td = document.createElement("td");
     const input = document.createElement("input");
+    input.className = "input input-sm";
     Object.assign(input, { type: "number", value, step: 1, ...(i ? { min: -60, max: 60 } : { min: 1, max: 127 }) });
     input.setAttribute("aria-label", i ? "offset" : "from velocity");
     input.addEventListener("input", () => { readDraft(); drawKeyInfo(false); });
@@ -132,7 +128,8 @@ function pointRow(point) {
   });
   const remove = document.createElement("button");
   remove.type = "button";
-  remove.textContent = "×";
+  remove.className = "btn btn-ghost btn-icon btn-sm";
+  remove.innerHTML = ui.icon("close");
   remove.title = remove.ariaLabel = "Remove this point";
   remove.addEventListener("click", () => { tr.remove(); readDraft(); drawKeyInfo(false); });
   const td = document.createElement("td");
@@ -177,7 +174,7 @@ function drawOffsets(rebuild) {
   message.textContent = problem || (changed ? "not saved yet: the curve shows it" : "");
   $("save-offsets").disabled = Boolean(problem) || !changed;
   $("add-point").disabled = (draft || []).length >= MAX_POINTS;
-  $("clear-offsets").textContent = pedalDown ? "Use the pedal-up offsets" : "No offsets for this key";
+  $("clear-offsets").textContent = pedalDown ? "Use the pedal-up offsets" : "Remove its offsets";
 }
 
 $("add-point").addEventListener("click", () => {
@@ -234,13 +231,13 @@ function drawCurve(info) {
     "aria-label": `Duty by velocity for key ${info.key}: ${low}% to ${high}%` });
   svg.style.maxWidth = W + "px";
   for (let d = low; d <= high; d += 10) {
-    svg.append(svgEl("line", { x1: m.left, x2: W - m.right, y1: y(d), y2: y(d), stroke: "#e1e0d9" }));
+    svg.append(svgEl("line", { x1: m.left, x2: W - m.right, y1: y(d), y2: y(d), stroke: ui.token("--chart-line") }));
     const t = svgEl("text", { x: m.left - 5, y: y(d) + 3, class: "tick", "text-anchor": "end" });
     t.textContent = d + "%";
     svg.append(t);
   }
   [1, 32, 64, 96, 127].forEach((v) => {
-    svg.append(svgEl("line", { x1: x(v), x2: x(v), y1: m.top, y2: H - m.bottom, stroke: "#f0efea" }));
+    svg.append(svgEl("line", { x1: x(v), x2: x(v), y1: m.top, y2: H - m.bottom, stroke: ui.token("--chart-row") }));
     const t = svgEl("text", { x: x(v), y: H - 6, class: "tick", "text-anchor": v === 1 ? "start" : v === 127 ? "end" : "middle" });
     t.textContent = v;
     svg.append(t);
@@ -249,10 +246,10 @@ function drawCurve(info) {
     points: duties.map((d, i) => `${x(i + 1)},${y(d)}`).join(" "),
     fill: "none", stroke: colour, "stroke-width": width, ...(dash ? { "stroke-dasharray": "4 3" } : {}),
   }));
-  if (points.length) line(table, "#8a8984", true, 1.5);
-  line(played, "#2a78d6");
+  if (points.length) line(table, ui.token("--chart-written"), true, 1.5);
+  line(played, ui.token("--chart-played"));
   const v = info.velocity;
-  svg.append(svgEl("circle", { cx: x(v), cy: y(played[v - 1]), r: 4, fill: "#f2b33d", stroke: "#fff", "stroke-width": 1.5 }));
+  svg.append(svgEl("circle", { cx: x(v), cy: y(played[v - 1]), r: 5, fill: "#f2b33d", stroke: ui.token("--chart-bg"), "stroke-width": 2 }));
   return svg;
 }
 
@@ -282,9 +279,11 @@ function drawKeyInfo(rebuildOffsets = false) {
   const range = info.pedal && info.pedalDuties ? info.pedalDuties : info.duties;
   const points = draft ?? (info.pedal && info.hasPedal ? info.offsets.pedal ?? info.offsets.up : info.offsets.up) ?? [];
   lines.push(`Duty from ${range[0]}% (velocity 1) to ${range[126]}% (127)` +
-    (points.length ? `; <span style="color:#2a78d6">as played</span>, <span style="color:#8a8984">the table</span>` : ""));
+    (points.length ? `; <span class="played-key">as played</span>, <span class="table-key">the table (dashed)</span>` : ""));
   const room = noRoom(points);
   if (room) lines.push(`<span class="room">${room}</span>`);
   lines.push(`Sends <code>${info.command}</code>`);
   facts.innerHTML = lines.join("<br>");
 }
+
+ui.onTheme(() => drawKeyInfo(false)); // the curve in the other theme's colours

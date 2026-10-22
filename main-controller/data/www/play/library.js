@@ -1,11 +1,13 @@
-// The library: pieces saved on the controller, to load, rename, download or
-// delete. Uses request(), message, showBusy() and the playback state from
-// app.js.
+// The library: pieces saved on the controller. Tapping one loads it; its "⋯"
+// menu renames, downloads or deletes it. Uses ui (/assets/app.js), and
+// showBusy(), closeLibrary() and the playback state from app.js.
 const piecesList = document.getElementById("pieces");
 const librarySearch = document.getElementById("library-search");
 const librarySort = document.getElementById("library-sort");
 const libraryUsage = document.getElementById("library-usage");
+const libraryEmpty = document.getElementById("library-empty");
 let libraryPieces = [];
+let libraryLoaded = false;
 let loadedLibraryId = "";
 let renaming = null; // the id being renamed: the list isn't redrawn under it
 
@@ -13,21 +15,29 @@ try {
   librarySort.value = localStorage.getItem("library-sort") || "played";
 } catch { /* not available */ }
 
+// Skeleton rows until the first list arrives.
+piecesList.replaceChildren(...[0, 1, 2].map(() => ui.el("li", { class: "skeleton-row" },
+  ui.el("div", { class: "skeleton" }), ui.el("div", { class: "lines" }, ui.el("div", { class: "skeleton" }), ui.el("div", { class: "skeleton" })))));
+
 async function loadLibrary() {
-  let body = null;
+  let body;
   try {
-    const response = await fetch("/api/library");
-    body = response.ok ? await response.json() : null;
-  } catch { /* shown as unavailable */ }
-  if (!body) {
-    libraryUsage.textContent = "";
+    body = await ui.api("/api/library");
+  } catch {
+    if (!libraryLoaded) {
+      piecesList.replaceChildren();
+      libraryEmpty.replaceChildren(ui.el("div", { class: "empty", html: ui.icon("wifi") },
+        ui.el("h3", {}, "Couldn't load the library"), ui.el("button", { class: "btn btn-sm", type: "button",
+          onclick: loadLibrary }, "Try again")));
+    }
     return;
   }
+  libraryLoaded = true;
   libraryPieces = body.pieces;
   const mb = (bytes) => (bytes / 1048576).toFixed(1);
   libraryUsage.textContent = body.available
-    ? `${libraryPieces.length} ${libraryPieces.length === 1 ? "piece" : "pieces"}, ${mb(body.usedBytes)} of ${mb(body.totalBytes)} MB used`
-    : "not available: upload the firmware with the new partition table";
+    ? `${libraryPieces.length} ${libraryPieces.length === 1 ? "piece" : "pieces"} · ${mb(body.usedBytes)} of ${mb(body.totalBytes)} MB used`
+    : "Not available: upload the firmware with the new partition table";
   drawLibrary();
 }
 
@@ -42,8 +52,10 @@ function when(seconds) {
     ...(date.getFullYear() !== today.getFullYear() ? { year: "numeric" } : {}) });
 }
 
+const size = (bytes) => (bytes < 1048576 ? `${Math.ceil(bytes / 1024)} KB` : `${(bytes / 1048576).toFixed(1)} MB`);
+
 function drawLibrary() {
-  if (renaming) return;
+  if (renaming || !libraryLoaded) return;
   const words = librarySearch.value.toLowerCase().split(/\s+/).filter(Boolean);
   const shown = libraryPieces
     .filter((p) => words.every((w) => p.name.toLowerCase().includes(w)))
@@ -52,73 +64,78 @@ function drawLibrary() {
       added: (a, b) => b.added - a.added || a.name.localeCompare(b.name),
       name: (a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" }),
     }[librarySort.value]);
-  const busy = libraryBusy;
-  piecesList.replaceChildren(...shown.map((piece) => pieceRow(piece, busy)));
-  const empty = document.getElementById("library-empty") || Object.assign(document.createElement("p"),
-    { id: "library-empty", className: "library-empty" });
-  empty.textContent = !libraryPieces.length ? "Pieces you add are saved here, to play again without uploading them."
-    : !shown.length ? "No piece matches." : "";
-  piecesList.after(empty);
-  empty.hidden = !empty.textContent;
+  piecesList.replaceChildren(...shown.map(pieceRow));
+  if (!libraryPieces.length) {
+    libraryEmpty.replaceChildren(ui.el("div", { class: "empty", html: ui.icon("library") },
+      ui.el("h3", {}, "Your library is empty"),
+      ui.el("p", { class: "small" }, "Pieces you add are kept here, to play again without uploading them."),
+      ui.el("label", { class: "btn btn-primary", for: "file", html: ui.icon("plus") }, "Add a piece")));
+  } else if (!shown.length) {
+    libraryEmpty.replaceChildren(ui.el("div", { class: "empty" }, ui.el("p", {}, `No piece matches “${librarySearch.value}”.`)));
+  } else {
+    libraryEmpty.replaceChildren();
+  }
 }
 
-function pieceRow(piece, busy) {
-  const li = document.createElement("li");
-  li.classList.toggle("loaded", piece.id === loadedLibraryId);
-  const text = document.createElement("div");
-  text.className = "piece-text";
-  const name = document.createElement("div");
-  name.className = "piece-name";
-  name.textContent = piece.name;
-  name.title = "Click to rename";
-  name.tabIndex = 0;
-  name.addEventListener("click", () => rename(piece, name));
-  name.addEventListener("keydown", (e) => { if (e.key === "Enter") rename(piece, name); });
-  if (piece.id === loadedLibraryId) {
-    const badge = document.createElement("span");
-    badge.className = "piece-badge";
-    badge.textContent = "loaded";
-    name.append(badge);
-  }
-  const meta = document.createElement("div");
-  meta.className = "piece-meta";
-  meta.textContent = [formatTime(piece.durationMs), `${piece.notes.toLocaleString()} notes`,
-    piece.bytes < 1048576 ? `${Math.ceil(piece.bytes / 1024)} KB` : `${(piece.bytes / 1048576).toFixed(1)} MB`,
-    piece.added ? `added ${when(piece.added)}` : "",
-    piece.lastPlayed ? `played ${when(piece.lastPlayed)}` : ""].filter(Boolean).join(" · ");
-  text.append(name, meta);
-
-  const load = document.createElement("button");
-  load.type = "button";
-  load.textContent = "Load";
-  load.disabled = busy;
-  load.addEventListener("click", () => loadFromLibrary(piece));
-  const download = document.createElement("a");
-  download.className = "button";
-  download.href = "/api/library/file?id=" + piece.id;
-  download.textContent = "Download";
-  download.setAttribute("download", piece.name + ".mid");
-  const remove = document.createElement("button");
-  remove.type = "button";
-  remove.textContent = "Delete";
-  remove.addEventListener("click", async () => {
-    if (!confirm(`Delete “${piece.name}” from the library?`)) return;
-    await request("/api/library/delete", jsonPost({ id: piece.id }));
-    loadLibrary();
+function pieceRow(piece) {
+  const loaded = piece.id === loadedLibraryId;
+  // The full name on hover, in case it's cut short.
+  const name = ui.el("div", { class: "piece-name", title: piece.name }, piece.name);
+  const meta = ui.el("div", { class: "piece-meta" }, [ui.formatTime(piece.durationMs), `${piece.notes.toLocaleString()} notes`,
+    size(piece.bytes), piece.lastPlayed ? `played ${when(piece.lastPlayed)}` : piece.added ? `added ${when(piece.added)}` : ""]
+    .filter(Boolean).join(" · "));
+  const more = ui.el("button", { class: "btn btn-ghost btn-icon btn-sm", type: "button", "aria-label": `More for ${piece.name}`,
+    html: ui.icon("more") });
+  const li = ui.el("li", { class: (loaded ? "loaded" : "") + (libraryBusy ? " disabled" : ""), tabIndex: 0,
+    "aria-label": `${piece.name}${loaded ? ", loaded" : ""}` },
+    ui.el("div", { class: "piece-icon", html: ui.icon(loaded && playing ? "pause" : loaded ? "play" : "music") }),
+    ui.el("div", { class: "piece-text" }, name, meta), more);
+  const choose = () => {
+    if (renaming) return;
+    if (libraryBusy) {
+      ui.toast("Stop the piece that's playing first");
+      return;
+    }
+    if (loaded) {
+      closeLibrary();
+      return;
+    }
+    loadFromLibrary(piece);
+  };
+  li.addEventListener("click", (event) => {
+    if (!event.target.closest("button, input")) choose();
   });
-  li.append(text, load, download, remove);
+  li.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && event.target === li) choose();
+  });
+  more.addEventListener("click", (event) => {
+    event.stopPropagation();
+    ui.menu(more, [
+      { label: "Rename", icon: "edit", onclick: () => rename(piece, name) },
+      { label: "Download", icon: "download", href: "/api/library/file?id=" + piece.id, download: piece.name + ".mid" },
+      { label: "Delete", icon: "trash", danger: true, onclick: () => remove(piece) },
+    ]);
+  });
   return li;
 }
 
-const jsonPost = (body) => ({ method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+async function remove(piece) {
+  const sure = await ui.confirm({
+    title: `Delete “${piece.name}”?`,
+    message: "It's removed from the library with its settings. This can't be undone (a backup can bring it back).",
+    confirm: "Delete", danger: true,
+  });
+  if (!sure) return;
+  if (await ui.request("/api/library/delete", { json: { id: piece.id } })) {
+    ui.toast(`Deleted “${piece.name}”`);
+  }
+  loadLibrary();
+}
 
 function rename(piece, nameEl) {
   if (renaming) return;
   renaming = piece.id;
-  const input = document.createElement("input");
-  input.value = piece.name;
-  input.maxLength = 80;
-  input.setAttribute("aria-label", "Name");
+  const input = ui.el("input", { class: "input input-sm", value: piece.name, maxLength: 80, "aria-label": "Name" });
   nameEl.replaceChildren(input);
   input.focus();
   input.select();
@@ -128,31 +145,31 @@ function rename(piece, nameEl) {
     done = true;
     const name = input.value.trim();
     if (save && name && name !== piece.name) {
-      await request("/api/library/rename", jsonPost({ id: piece.id, name }));
+      await ui.request("/api/library/rename", { json: { id: piece.id, name } });
     }
     renaming = null;
     loadLibrary();
-    refresh();
   };
-  input.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") finish(true);
-    if (e.key === "Escape") finish(false);
+  input.addEventListener("click", (event) => event.stopPropagation());
+  input.addEventListener("keydown", (event) => {
+    event.stopPropagation();
+    if (event.key === "Enter") finish(true);
+    if (event.key === "Escape") finish(false);
   });
   input.addEventListener("blur", () => finish(true));
 }
 
 async function loadFromLibrary(piece) {
-  message.textContent = "";
-  message.classList.remove("error");
   uploading = true; // the same indicator: it's built like an upload
   showBusy();
-  const summary = await request("/api/library/load", jsonPost({ id: piece.id }));
+  closeLibrary();
+  const summary = await ui.request("/api/library/load", { json: { id: piece.id } });
   uploading = false;
   showBusy();
   if (summary && summary.mergedNotes > 0) {
-    message.textContent = summary.mergedNotes + " repeated notes were too fast to re-strike and were held instead";
+    ui.toast(`${summary.mergedNotes} repeats too fast to strike again are held instead`);
   }
-  refresh();
+  ui.refreshStatus();
   loadLibrary();
 }
 

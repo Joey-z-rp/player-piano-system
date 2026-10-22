@@ -1,0 +1,87 @@
+/* The Settings page: a section list (a side column, or chips across the top
+   on narrow screens) and a card per section. */
+.settings-layout { display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: var(--space-5); align-items: start; }
+.subnav { position: sticky; top: calc(var(--header-h) + var(--space-4)); display: flex; flex-direction: column; gap: 2px; }
+.subnav a { padding: 8px 12px; border-radius: var(--radius-sm); color: var(--text-2); font-weight: 550; }
+.subnav a:hover { background: var(--surface-2); color: var(--text); text-decoration: none; }
+.subnav a.current { background: var(--accent-soft); color: var(--accent); }
+.settings-sections > .card { scroll-margin-top: calc(var(--header-h) + var(--space-4)); }
+@media (max-width: 860px) {
+  .settings-layout { grid-template-columns: minmax(0, 1fr); gap: var(--space-3); }
+  .subnav { top: var(--header-h); z-index: 10; flex-direction: row; overflow-x: auto; gap: var(--space-1);
+    margin: 0 calc(-1 * var(--space-4)); padding: var(--space-2) var(--space-4);
+    background: color-mix(in srgb, var(--bg) 92%, transparent); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+    scrollbar-width: none; }
+  .subnav::-webkit-scrollbar { display: none; }
+  .subnav a { white-space: nowrap; border: 1px solid var(--border); border-radius: 999px; padding: 6px 12px; font-size: var(--text-sm); background: var(--surface); }
+  .settings-sections > .card { scroll-margin-top: calc(var(--header-h) + 56px); }
+}
+
+/* One setting: what it is on the left, its value on the right (stacked on phones). */
+.setting { display: grid; grid-template-columns: minmax(0, 1fr) 220px; gap: var(--space-1) var(--space-4); align-items: center;
+  padding: var(--space-3) 0; border-top: 1px solid var(--border); }
+.section-title + .setting, .section-title + p + .setting { border-top: none; }
+.setting.wide { grid-template-columns: minmax(0, 1fr) 300px; }
+.setting-text { display: flex; flex-direction: column; min-width: 0; }
+.setting-text label { font-weight: 550; }
+.setting-text .hint { font-size: var(--text-xs); color: var(--text-3); }
+.setting-input { display: flex; flex-direction: column; gap: 2px; align-items: stretch; }
+.setting-input .default { font-size: var(--text-xs); color: var(--text-3); text-align: right; }
+.setting.changed .setting-text label::after { content: ""; display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+  background: var(--chart-changed); margin-left: 8px; vertical-align: 2px; }
+.setting.changed .default { color: var(--chart-changed); }
+@media (max-width: 560px) {
+  .setting, .setting.wide { grid-template-columns: minmax(0, 1fr); }
+  .setting-input .default { text-align: left; }
+}
+
+.limits-wrap { overflow-x: auto; margin: var(--space-2) 0; }
+table.limits { border-collapse: collapse; }
+table.limits th { font-size: var(--text-xs); font-weight: 600; color: var(--text-2); text-align: left; padding: 0 var(--space-2) var(--space-1) 0; white-space: nowrap; }
+table.limits td { padding: 3px var(--space-2) 3px 0; }
+table.limits input { width: 7em; }
+table.limits.changed { outline: 2px solid color-mix(in srgb, var(--chart-changed) 40%, transparent); outline-offset: 4px; border-radius: 4px; }
+.limits-foot { margin-bottom: var(--space-2); }
+
+.heat-now:empty { display: none; }
+.heat-now { padding: var(--space-3); border-radius: var(--radius); background: var(--surface-2); margin-bottom: var(--space-2); }
+
+/* Wi-Fi */
+.wifi-now { display: flex; gap: var(--space-3); align-items: center; padding: var(--space-3); border-radius: var(--radius); background: var(--surface-2); }
+.wifi-now svg { width: 24px; height: 24px; color: var(--accent); flex: none; }
+.wifi-now .lines { display: flex; flex-direction: column; }
+.networks { margin: var(--space-2) 0; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+.networks:empty { display: none; }
+.networks > li { padding: 0; }
+.networks button { width: 100%; display: flex; align-items: center; gap: var(--space-3); padding: 10px 14px; border: none;
+  background: none; color: var(--text); font: var(--text-md) var(--font); text-align: left; cursor: pointer; }
+.networks button:hover, .networks button.chosen { background: var(--accent-soft); }
+.networks .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.networks .signal { font-size: var(--text-xs); color: var(--text-2); font-variant-numeric: tabular-nums; }
+.wifi-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-3); margin-top: var(--space-3); }
+.wifi-form .switch { grid-column: 1 / -1; }
+@media (max-width: 560px) { .wifi-form { grid-template-columns: minmax(0, 1fr); } }
+.form-actions { margin: var(--space-3) 0; }
+
+/* Backup */
+.restore-choices { display: flex; flex-direction: column; gap: var(--space-2); margin-top: var(--space-3); }
+.restore-log { margin-top: var(--space-3); max-height: 14em; overflow-y: auto; background: var(--surface-2); padding: var(--space-3);
+  border-radius: var(--radius-sm); font-size: var(--text-xs); color: var(--text-2); }
+.restore-log:empty { display: none; }
+
+/* About */
+.facts-list { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: var(--space-2) var(--space-5); margin: 0 0 var(--space-3); }
+.facts-list dt { color: var(--text-2); }
+.facts-list dd { margin: 0; overflow-wrap: anywhere; }
+
+/* Unsaved playing rules: a bar at the bottom until they're saved or dropped. */
+.savebar { position: fixed; z-index: 28; left: 50%; transform: translateX(-50%); bottom: var(--space-4);
+  width: min(560px, calc(100vw - 2 * var(--space-4)));
+  display: flex; align-items: center; gap: var(--space-2); padding: var(--space-2) var(--space-2) var(--space-2) var(--space-4);
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); box-shadow: var(--shadow-raised);
+  font-weight: 550; }
+body.has-mini .savebar { bottom: 88px; }
+@media (max-width: 760px) {
+  .savebar { bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom) + var(--space-2)); }
+  body.has-mini .savebar { bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom) + 80px); }
+}

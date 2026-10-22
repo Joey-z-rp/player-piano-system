@@ -116,6 +116,7 @@ void loop()
   wifiStation.poll();
   ota.poll();
   restartIfAsked();
+  webServer.poll();
   if (!online && wifiStation.isConnected() && !wifiStation.inSetup())
   {
     online = true;

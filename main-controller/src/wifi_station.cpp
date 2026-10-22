@@ -137,7 +137,7 @@ void WiFiStationModule::startSetup()
   WiFi.mode(WIFI_AP_STA); // the station side scans, and keeps trying the saved network
   WiFi.softAP(SETUP_NETWORK);
   dns.start(53, "*", WiFi.softAPIP()); // every name leads here, so phones open the setup page
-  Serial.printf("Wi-Fi: started \"%s\": join it and open http://%s/wifi/\n", SETUP_NETWORK,
+  Serial.printf("Wi-Fi: started \"%s\": join it and open http://%s/settings/#wifi\n", SETUP_NETWORK,
                 WiFi.softAPIP().toString().c_str());
   startNameService();
 }

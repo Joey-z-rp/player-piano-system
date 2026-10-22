@@ -1,6 +1,7 @@
-// The driver test page: keys (by velocity or duty, held or struck), the
-// pedal, raw commands and the log. What the table does with a key and its
-// offsets are in key-info.js; the listening tests in listen.js.
+// The Keys page: a keyboard that fits the screen, keys played by velocity or
+// duty (held or struck), the pedal, raw commands and the log. What the table
+// does with a key and its offsets are in key-info.js; the listening tests in
+// listen.js. Shared helpers (ui) are in /assets/app.js.
 const KEYS = 88;
 const NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
 const noteName = (key) => NAMES[(key + 21) % 12] + (Math.floor((key + 21) / 12) - 1);
@@ -28,6 +29,7 @@ const settings = {
   rampVelocities: "16, 32, 48, 64, 80, 96, 112, 127", rampGap: 800,
   rangeFrom: 34, rangeTo: 44, rangeGap: 500,
   repeatFirst: 64, repeatSecond: 64, repeatInterval: 150,
+  zoom: innerWidth < 700 ? "2" : innerWidth < 1100 ? "4" : "all", // keys shown: all, or 4 or 2 octaves
   ...saved,
 };
 const save = () => {
@@ -56,12 +58,14 @@ async function post(url, body, label) {
     const reply = await response.json();
     if (!response.ok) {
       write(`${label}: failed (${reply.error})`);
+      ui.toast(`${label || "That"} failed: ${reply.error}`, { error: true });
       return null;
     }
     if (label) write(label);
     return reply;
   } catch (error) {
-    write(`${label}: no reply from the controller (${error.message})`);
+    write(`${label}: no reply from the piano (${error.message})`);
+    ui.toast("Couldn't reach the piano", { error: true });
     return null;
   }
 }
@@ -174,22 +178,48 @@ function keyButton(key) {
   return button;
 }
 
-// White keys sit in a row; each black key is placed over the boundary
-// between the two white keys around it.
-const WHITE_WIDTH = 22, BLACK_WIDTH = 14;
-let whites = 0;
 for (let key = 0; key < KEYS; key++) {
-  const button = keyButton(key);
-  if (isBlack(key)) {
-    button.style.left = `${whites * WHITE_WIDTH - BLACK_WIDTH / 2}px`;
-  } else {
-    whites++;
-  }
-  keyboard.append(button);
+  keyboard.append(keyButton(key));
   for (const select of [keySelect, $("range-from"), $("range-to")]) {
-    select.append(new Option(`${key} · ${noteName(key)}`, key));
+    select.append(new Option(`${noteName(key)} · ${key}`, key));
   }
 }
+
+// White keys sit in a row, sized so the chosen number of them fills the
+// width (all 52, or 4 or 2 octaves' 29 or 15, scrolling sideways); each black
+// key is placed over the boundary between the two white keys around it.
+const scroller = $("keyboard-scroll");
+function layoutKeyboard() {
+  const shown = { all: 52, 4: 29, 2: 15 }[settings.zoom] || 52;
+  const white = Math.max(10, scroller.clientWidth / shown);
+  const black = white * 0.62;
+  keyboard.style.setProperty("--white-w", `${white}px`);
+  keyboard.style.setProperty("--black-w", `${black}px`);
+  keyboard.style.setProperty("--key-h", `${Math.max(90, Math.min(170, white * 5.2))}px`);
+  let whites = 0;
+  keyboard.querySelectorAll("[data-key]").forEach((button) => {
+    if (button.classList.contains("black")) button.style.left = `${whites * white - black / 2}px`;
+    else whites++;
+    // C labels only where there's room for them.
+    if (!button.classList.contains("black")) {
+      button.textContent = white >= 20 && noteName(Number(button.dataset.key)).startsWith("C") ? noteName(Number(button.dataset.key)) : "";
+    }
+  });
+}
+function centreSelected() {
+  const button = keyboard.querySelector(`[data-key="${settings.key}"]`);
+  if (button) scroller.scrollLeft = button.offsetLeft - scroller.clientWidth / 2 + button.offsetWidth / 2;
+}
+new ResizeObserver(() => {
+  layoutKeyboard();
+  centreSelected();
+}).observe(scroller);
+document.querySelectorAll('input[name="zoom"]').forEach((radio) => radio.addEventListener("change", () => {
+  settings.zoom = radio.value;
+  save();
+  layoutKeyboard();
+  centreSelected();
+}));
 
 // Mouse, pen or touch: held while pressed (sliding along the keys plays each
 // one in turn), or struck for the hold time.
@@ -235,10 +265,10 @@ function showMode() {
   $("velocity-row").hidden = !velocityMode();
   $("duty-row").hidden = velocityMode();
   document.querySelectorAll('input[name="style"]').forEach((r) => (r.checked = r.value === settings.style));
-  const how = pressStyle() ? "Press a key to play it, and let go to release it" : "Click a key to strike it for the hold time";
+  const how = pressStyle() ? "Press a key to play it; let go to release it" : "Tap a key to strike it";
   $("mode-hint").textContent = velocityMode()
-    ? `${how}, at this velocity, the way a piece plays it (from the velocity table).`
-    : `${how}, with this duty: a plain press, whatever the table says.`;
+    ? `${how}: at the velocity below, the way a piece plays it.`
+    : `${how}: a plain press at the duty below, whatever the velocity table says.`;
   drawKeyInfo();
 }
 document.querySelectorAll('input[name="style"]').forEach((radio) => radio.addEventListener("change", () => {
@@ -305,6 +335,7 @@ function drawHistory() {
   historyBox.replaceChildren(...settings.history.map((command) => {
     const button = document.createElement("button");
     button.type = "button";
+    button.className = "btn btn-sm";
     button.textContent = command;
     button.title = "Send again";
     button.addEventListener("click", () => send(command));
@@ -331,9 +362,11 @@ document.addEventListener("DOMContentLoaded", () => {
   velocityInput.value = velocityRange.value = settings.velocity;
   pedalBox.checked = settings.pedal;
   holdInput.value = settings.hold;
+  document.querySelectorAll('input[name="zoom"]').forEach((r) => (r.checked = r.value === settings.zoom));
   showMode();
   selectKey(settings.key);
   loadOffsets();
   drawHistory();
-  keyboard.querySelector(`[data-key="${settings.key}"]`)?.scrollIntoView({ block: "nearest", inline: "center" });
+  layoutKeyboard();
+  centreSelected();
 });

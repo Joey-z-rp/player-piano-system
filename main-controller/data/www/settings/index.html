@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Settings · Player piano</title>
+<meta name="theme-color" content="#f6f5f1" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#121212" media="(prefers-color-scheme: dark)">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Piano">
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/assets/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/assets/icon-180.png">
+<script>try { var t = localStorage.getItem("theme"); if (t) document.documentElement.dataset.theme = t; } catch (e) {}</script>
+<link rel="stylesheet" href="/assets/app.css">
+<link rel="stylesheet" href="/settings/settings.css">
+</head>
+<body data-section="settings">
+<main class="page">
+  <div class="page-head"><h1>Settings</h1></div>
+  <div class="settings-layout">
+    <nav class="subnav" id="subnav" aria-label="Settings sections">
+      <a href="#rules">Playing rules</a>
+      <a href="#heat">Solenoid heat</a>
+      <a href="#wifi">Wi-Fi</a>
+      <a href="#backup">Backup</a>
+      <a href="#appearance">Appearance</a>
+      <a href="#about">About</a>
+    </nav>
+
+    <div class="settings-sections">
+      <!-- The play config: the timing rules -->
+      <section class="card" id="rules">
+        <div class="card-head">
+          <h2>Playing rules</h2><span class="spacer"></span>
+          <button class="btn btn-ghost btn-sm" type="button" id="restore">Restore defaults</button>
+          <p>The timing rules the piano was measured to need. Saved on the piano; they apply from the next Play.
+            The calibration itself (the velocity table) isn't here.</p>
+        </div>
+
+        <h3 class="section-title">Notes</h3>
+        <div class="setting" data-key="min_note_ms">
+          <div class="setting-text"><label>Shortest hold</label><span class="hint">ms a key is held after its hammer lands</span></div>
+          <div class="setting-input"><input class="input input-sm" type="number" min="0" max="500"><span class="default"></span></div>
+        </div>
+        <div class="setting" data-key="restrike_gap_ms">
+          <div class="setting-text"><label>Release before a restrike</label><span class="hint">ms a key is let go before it strikes again, when there's time</span></div>
+          <div class="setting-input"><input class="input input-sm" type="number" min="0" max="500"><span class="default"></span></div>
+        </div>
+
+        <h3 class="section-title">Repeats</h3>
+        <p class="hint">How soon a key can strike again (ms between the notes sounding), by how loud the repeat is, after a
+          softer or a loud note. A repeat any sooner is merged into the note before.</p>
+        <div class="limits-wrap">
+          <table class="limits" id="limits-table">
+            <thead><tr><th>Repeat velocity from</th><th>After a softer note</th><th>After a loud note</th><th></th></tr></thead>
+            <tbody id="limits"></tbody>
+          </table>
+        </div>
+        <div class="row limits-foot">
+          <button class="btn btn-sm" type="button" id="add-limit">Add a row</button>
+          <span class="tiny faint" id="limits-default"></span>
+        </div>
+        <div class="setting" data-key="repeat_loud_from">
+          <div class="setting-text"><label>A loud note is from</label><span class="hint">velocity</span></div>
+          <div class="setting-input"><input class="input input-sm" type="number" min="1" max="127"><span class="default"></span></div>
+        </div>
+        <div class="setting wide" data-key="repeat_dead_zone" data-kind="list">
+          <div class="setting-text"><label>Dead zone</label><span class="hint">from velocity, to velocity, from ms, to ms: repeats this loud after a softer note also miss in this interval</span></div>
+          <div class="setting-input"><input class="input input-sm" type="text"><span class="default"></span></div>
+        </div>
+        <div class="setting" data-key="repeat_window_ms">
+          <div class="setting-text"><label>Counts as a repeat within</label><span class="hint">ms of the last strike on its key</span></div>
+          <div class="setting-input"><input class="input input-sm" type="number" min="0" max="2000"><span class="default"></span></div>
+        </div>
+        <div class="setting" data-key="repeat_late_ms">
+          <div class="setting-text"><label>Sent early by</label><span class="hint">ms: a repeat's hammer lands about that much later</span></div>
+          <div class="setting-input"><input class="input input-sm" type="number" min="0" max="100"><span class="default"></span></div>
+        </div>
+        <div class="setting" data-key="repeat_clamp_offset_ms">
+          <div class="setting-text"><label>Repeat clamp starts</label><span class="hint">ms from the hammer landing (negative = before), in place of the key's own clamp</span></div>
+          <div class="setting-input"><input class="input input-sm" type="number" min="-200" max="200"><span class="default"></span></div>
+        </div>
+        <div class="setting" data-key="repeat_clamp_ms">
+          <div class="setting-text"><label>Repeat clamp lasts</label><span class="hint">ms; 0 for no repeat clamp</span></div>
+          <div class="setting-input"><input class="input input-sm" type="number" min="0" max="1000"><span class="default"></span></div>
+        </div>
+        <div class="setting" data-key="repeat_clamp_duty">
+          <div class="setting-text"><label>Repeat clamp duty</label><span class="hint">%</span></div>
+          <div class="setting-input"><input class="input input-sm" type="number" min="0" max="100" step="0.25"><span class="default"></span></div>
+        </div>
+
+        <h3 class="section-title">Sustain pedal</h3>
+        <div class="setting" data-key="pedal_settle_ms">
+          <div class="setting-text"><label>Lifts the dampers in</label><span class="hint">ms after it's sent down</span></div>
+          <div class="setting-input"><input class="input input-sm" type="number" min="0" max="1000"><span class="default"></span></div>
+        </div>
+        <div class="setting" data-key="pedal_min_ms">
+          <div class="setting-text"><label>Shortest between changes</label><span class="hint">ms</span></div>
+          <div class="setting-input"><input class="input input-sm" type="number" min="0" max="1000"><span class="default"></span></div>
+        </div>
+        <div class="setting wide" data-key="pedal_press" data-kind="text">
+          <div class="setting-text"><label>Press command</label><span class="hint">duty:ms:duty:ms:hold, sent to both its solenoids</span></div>
+          <div class="setting-input"><input class="input input-sm mono" type="text"><span class="default"></span></div>
+        </div>
+        <div class="setting wide" data-key="pedal_release" data-kind="text">
+          <div class="setting-text"><label>Release command</label><span class="hint">the same form</span></div>
+          <div class="setting-input"><input class="input input-sm mono" type="text"><span class="default"></span></div>
+        </div>
+      </section>
+
+      <!-- Solenoid heat: part of the same config -->
+      <section class="card" id="heat">
+        <div class="card-head">
+          <h2>Solenoid heat</h2><span class="spacer"></span><span class="chip" id="heat-watched"></span>
+          <p>The piano estimates each solenoid's temperature from what it's driven with. At the limit a piece pauses,
+            and Play waits until it has cooled to 80% of it. A coil with any of its numbers at 0 isn't watched: measure
+            its resistance, then hold it at a steady duty and record its temperature for 15–20 minutes for the other two.</p>
+        </div>
+        <p class="heat-now small" id="heat-now"></p>
+        <div class="setting" data-key="heat_volts">
+          <div class="setting-text"><label>Supply</label><span class="hint">volts</span></div>
+          <div class="setting-input"><input class="input input-sm" type="number" min="1" max="100" step="0.1"><span class="default"></span></div>
+        </div>
+        <div class="setting wide" data-key="heat_squared" data-kind="select">
+          <div class="setting-text"><label>Heat goes with</label><span class="hint">how the drivers let the coil's current fall</span></div>
+          <div class="setting-input"><select class="input input-sm"><option value="true">duty squared (flyback diode)</option><option value="false">duty (fast-decay clamp)</option></select><span class="default"></span></div>
+        </div>
+        <div class="setting" data-key="heat_limit_c">
+          <div class="setting-text"><label>Rise allowed</label><span class="hint">°C above the room</span></div>
+          <div class="setting-input"><input class="input input-sm" type="number" min="5" max="150" step="1"><span class="default"></span></div>
+        </div>
+        <h3 class="section-title">Key coils</h3>
+        <div class="setting" data-key="key_coil_ohms">
+          <div class="setting-text"><label>Resistance</label><span class="hint">ohms, cold</span></div>
+          <div class="setting-input"><input class="input input-sm" type="number" min="0" max="1000" step="0.1"><span class="default"></span></div>
+        </div>
+        <div class="setting" data-key="key_coil_rth">
+          <div class="setting-text"><label>Heating</label><span class="hint">°C per watt, held</span></div>
+          <div class="setting-input"><input class="input input-sm" type="number" min="0" max="100" step="0.01"><span class="default"></span></div>
+        </div>
+        <div class="setting" data-key="key_coil_tau_s">
+          <div class="setting-text"><label>Time constant</label><span class="hint">seconds</span></div>
+          <div class="setting-input"><input class="input input-sm" type="number" min="0" max="7200" step="1"><span class="default"></span></div>
+        </div>
+        <h3 class="section-title">Pedal coils</h3>
+        <div class="setting" data-key="pedal_coil_ohms">
+          <div class="setting-text"><label>Resistance</label><span class="hint">ohms, cold</span></div>
+          <div class="setting-input"><input class="input input-sm" type="number" min="0" max="1000" step="0.1"><span class="default"></span></div>
+        </div>
+        <div class="setting" data-key="pedal_coil_rth">
+          <div class="setting-text"><label>Heating</label><span class="hint">°C per watt, held</span></div>
+          <div class="setting-input"><input class="input input-sm" type="number" min="0" max="100" step="0.01"><span class="default"></span></div>
+        </div>
+        <div class="setting" data-key="pedal_coil_tau_s">
+          <div class="setting-text"><label>Time constant</label><span class="hint">seconds</span></div>
+          <div class="setting-input"><input class="input input-sm" type="number" min="0" max="7200" step="1"><span class="default"></span></div>
+        </div>
+      </section>
+
+      <!-- Wi-Fi -->
+      <section class="card" id="wifi">
+        <div class="card-head">
+          <h2>Wi-Fi</h2>
+          <p>The network the piano joins. If it can't join one, it starts its own, “Piano setup”: join that from a
+            phone and this page opens.</p>
+        </div>
+        <div class="wifi-now" id="now"><div class="skeleton" style="height:44px"></div></div>
+        <h3 class="section-title">Join a network</h3>
+        <div class="row"><button class="btn btn-sm" type="button" id="scan">Look for networks</button>
+          <span class="busy-line" id="scan-status" hidden><span class="spinner"></span><span>Looking…</span></span></div>
+        <ul class="list networks" id="networks"></ul>
+        <div class="wifi-form">
+          <label class="field"><span class="field-label">Network</span>
+            <input class="input" id="ssid" autocomplete="off" maxlength="32" autocapitalize="off"></label>
+          <label class="field"><span class="field-label">Password</span>
+            <input class="input" id="password" type="password" autocomplete="off" maxlength="63"></label>
+          <label class="switch small"><input type="checkbox" id="show-password"> Show the password</label>
+        </div>
+        <div class="row form-actions">
+          <button class="btn btn-primary" type="button" id="save-wifi">Save and join</button>
+          <button class="btn btn-ghost" type="button" id="forget">Forget the saved network</button>
+        </div>
+        <p class="small muted">Saving restarts the piano to join the network; it's then at http://piano.local/ (or the
+          address your router gives it). If it can't join, “Piano setup” comes back.</p>
+      </section>
+
+      <!-- Backup -->
+      <section class="card" id="backup">
+        <div class="card-head">
+          <h2>Backup</h2>
+          <p>Everything the piano keeps that isn't in the project's files: the playing rules, the key offsets from the
+            Keys page, and the library, with each piece's own settings.</p>
+        </div>
+        <h3 class="section-title">Back up</h3>
+        <label class="switch"><input type="checkbox" id="with-pieces" checked>
+          <span>Include the library's pieces <span class="small muted" id="pieces-size"></span></span></label>
+        <div class="row form-actions">
+          <button class="btn btn-primary" type="button" id="backup-button">Download a backup</button>
+          <span class="busy-line" id="backup-status" hidden><span class="spinner"></span><span></span></span>
+        </div>
+        <h3 class="section-title">Restore</h3>
+        <label class="btn" for="restore-file">Choose a backup…</label>
+        <input class="hidden-file" type="file" id="restore-file" accept=".zip,application/zip">
+        <div id="restore-choices" class="restore-choices" hidden>
+          <p class="small muted" id="restore-made"></p>
+          <label class="switch"><input type="checkbox" id="restore-settings" checked>
+            <span>Playing rules <span class="small muted">replaces the current ones</span></span></label>
+          <label class="switch"><input type="checkbox" id="restore-offsets" checked>
+            <span>Key offsets <span class="small muted" id="restore-offsets-hint"></span></span></label>
+          <label class="switch"><input type="checkbox" id="restore-library" checked>
+            <span>Library <span class="small muted" id="restore-library-hint"></span></span></label>
+          <div class="row form-actions">
+            <button class="btn btn-primary" type="button" id="restore-button">Restore</button>
+            <span class="busy-line" id="restore-status" hidden><span class="spinner"></span><span></span></span>
+          </div>
+        </div>
+        <pre class="restore-log" id="restore-log"></pre>
+      </section>
+
+      <!-- Appearance -->
+      <section class="card" id="appearance">
+        <div class="card-head"><h2>Appearance</h2><p>For this browser.</p></div>
+        <div class="segmented" role="radiogroup" aria-label="Theme">
+          <label><input type="radio" name="theme" value="auto"><span>Automatic</span></label>
+          <label><input type="radio" name="theme" value="light"><span>Light</span></label>
+          <label><input type="radio" name="theme" value="dark"><span>Dark</span></label>
+        </div>
+      </section>
+
+      <!-- About -->
+      <section class="card" id="about">
+        <div class="card-head"><h2>About</h2></div>
+        <p class="banner" id="firmware-warning" hidden></p>
+        <dl class="facts-list" id="about-list"></dl>
+        <p class="small muted">Add this page to your phone's home screen to open it like an app.</p>
+      </section>
+    </div>
+  </div>
+</main>
+
+<!-- Unsaved playing rules -->
+<div class="savebar" id="savebar" hidden>
+  <span id="savebar-text">Unsaved changes</span>
+  <span class="spacer"></span>
+  <button class="btn btn-ghost btn-sm" type="button" id="discard">Discard</button>
+  <button class="btn btn-primary btn-sm" type="button" id="save">Save</button>
+</div>
+
+<script src="/assets/app.js"></script>
+<script src="/settings/zip.js"></script>
+<script src="/settings/rules.js"></script>
+<script src="/settings/wifi.js"></script>
+<script src="/settings/backup.js"></script>
+<script src="/settings/about.js"></script>
+</body>
+</html>

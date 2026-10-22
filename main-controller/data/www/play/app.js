@@ -1,28 +1,18 @@
-// The play page: loading and playing a piece, the dynamics sliders and
-// tracks, and keeping it all in step with the controller (refresh). The note
-// view, velocity chart and library are in notes.js, velocities.js and
-// library.js.
+// The play page: loading and playing a piece, the sound sliders and tracks,
+// and keeping it all in step with the controller's live status (ui.onStatus).
+// The note view, velocity chart and library are in notes.js, velocities.js and
+// library.js; the shared shell, messages and API in /assets/app.js.
+const { formatTime, noteName, icon, el } = ui;
 const fileInput = document.getElementById("file");
 const piece = document.getElementById("piece");
+const pieceMeta = document.getElementById("piece-meta");
 const playButton = document.getElementById("play");
-const pauseButton = document.getElementById("pause");
 const stopButton = document.getElementById("stop");
 const progress = document.getElementById("progress");
-const time = document.getElementById("time");
-const message = document.getElementById("message");
+const timeNow = document.getElementById("time-now");
+const timeTotal = document.getElementById("time-total");
+const stateChip = document.getElementById("state-chip");
 const busy = document.getElementById("busy");
-const pieceMeta = document.getElementById("piece-meta");
-
-// A message floats at the bottom for a while (an error a little longer), or
-// until it's clicked.
-let messageTimer;
-new MutationObserver(() => {
-  clearTimeout(messageTimer);
-  if (message.textContent) {
-    messageTimer = setTimeout(() => (message.textContent = ""), message.classList.contains("error") ? 12000 : 7000);
-  }
-}).observe(message, { childList: true, characterData: true, subtree: true });
-message.addEventListener("click", () => (message.textContent = ""));
 const notesBusy = document.getElementById("notes-busy");
 const notesSection = document.getElementById("notes");
 const volume = document.getElementById("volume");
@@ -40,10 +30,23 @@ const repeatNote = document.getElementById("repeat-note");
 const partsSection = document.getElementById("parts");
 const partsList = document.getElementById("parts-list");
 const resetButton = document.getElementById("dynamics-reset");
-let dynamicsChanging = false; // while changing them, don't let refresh() move the sliders
+const heatLine = document.getElementById("heat");
+
+// Icons in the static buttons.
+stopButton.innerHTML = icon("stop");
+document.getElementById("zoom-in").innerHTML = icon("plus");
+document.getElementById("zoom-out").innerHTML = icon("minus");
+document.getElementById("change-prev").innerHTML = icon("left");
+document.getElementById("change-next").innerHTML = icon("right");
+document.getElementById("library-open").innerHTML = icon("library") + "<span>Library</span>";
+document.getElementById("library-close").innerHTML = icon("close");
+document.querySelector("#add-piece .add-icon").innerHTML = icon("plus");
+document.querySelector(".search-icon").innerHTML = icon("search");
+
+let dynamicsChanging = false; // while changing them, the status doesn't move the sliders
 // The position bar: drag it to choose where Play starts, or to jump while playing.
 let startFrom = 0; // ms on the piece's timeline where Play starts
-let seeking = false; // while dragging, don't let refresh() move the bar
+let seeking = false; // while dragging, the status doesn't move the bar
 let playing = false;
 let paused = false; // every key up; Play goes on from there
 let durationMs = 0;
@@ -53,15 +56,15 @@ let controllerBuilding = false;
 let libraryBusy = false; // playing or paused: no loading another piece
 let uploading = false;
 let notesLoading = false;
-// Over the note view when it's showing, else beside the piece's name.
+// Over the note view when it's showing, else in the player.
 function showBusy() {
-  const text = uploading ? "Uploading and building the piece…"
+  const text = uploading ? "Loading the piece…"
     : controllerBuilding ? "Building the piece with the new settings…"
     : notesLoading ? "Updating the notes…" : "";
   const onNotes = !notesSection.hidden;
-  notesBusy.firstElementChild.textContent = text;
+  notesBusy.querySelector("span:last-child").textContent = text;
   notesBusy.hidden = !text || !onNotes;
-  busy.textContent = text;
+  busy.querySelector("span:last-child").textContent = text;
   busy.hidden = !text || onNotes;
   showButtons();
 }
@@ -70,10 +73,13 @@ function showBusy() {
 let hasPiece = false;
 function showButtons() {
   fileInput.disabled = playing || paused || uploading;
-  playButton.disabled = playing || !hasPiece || controllerBuilding || notesLoading || uploading || dynamicsChanging;
-  playButton.textContent = paused ? "Resume" : "Play";
-  pauseButton.disabled = !playing;
+  document.getElementById("add-piece").setAttribute("aria-disabled", String(fileInput.disabled));
+  playButton.disabled = !hasPiece || (!playing && (controllerBuilding || notesLoading || uploading || dynamicsChanging));
+  playButton.innerHTML = icon(playing ? "pause" : "play");
+  playButton.setAttribute("aria-label", playing ? "Pause" : paused ? "Resume" : "Play");
   stopButton.disabled = !playing && !paused;
+  stateChip.textContent = playing ? "Playing" : paused ? "Paused" : hasPiece ? "Ready" : "No piece";
+  stateChip.className = "chip" + (playing ? " accent" : paused ? " warn" : "");
 }
 noteView.onLoading((loading) => {
   notesLoading = loading;
@@ -81,7 +87,7 @@ noteView.onLoading((loading) => {
 });
 
 // The speed the loaded piece is built at, which its times (the bar, startFrom)
-// are in, and its lead (times before it don't scale): from /api/status.
+// are in, and its lead (times before it don't scale): from the status.
 let pieceSpeed = 100;
 let pieceLead = 0;
 
@@ -106,12 +112,11 @@ function settings() {
 async function loadPiece() {
   let parts = [], offsets = [], muted = [];
   try {
-    const [piece, dynamics] = await Promise.all([fetch("/api/piece"), fetch("/api/dynamics")]);
-    parts = piece.ok ? (await piece.json()).parts || [] : [];
-    const saved = dynamics.ok ? await dynamics.json() : {};
-    offsets = saved.parts || [];
-    muted = saved.muted || [];
-  } catch (error) {
+    const [pieceInfo, dynamics] = await Promise.all([ui.api("/api/piece"), ui.api("/api/dynamics")]);
+    parts = pieceInfo.parts || [];
+    offsets = dynamics.parts || [];
+    muted = dynamics.muted || [];
+  } catch {
     parts = [];
   }
   partInfo = parts;
@@ -121,64 +126,52 @@ async function loadPiece() {
   drawVelocities();
 }
 
-const NAMES = ["C", "C♯", "D", "E♭", "E", "F", "F♯", "G", "A♭", "A", "B♭", "B"];
-const noteName = (midi) => NAMES[midi % 12] + (Math.floor(midi / 12) - 1);
-
 // One row per part, when the file has more than one, each with its offset.
 function showParts() {
   const shown = partInfo.filter((p) => p.notes > 0).length > 1;
   partsSection.hidden = !shown;
   noteView.setPartCount(shown ? partInfo.length : 0);
   if (!shown) return;
-  partsList.replaceChildren(
-    ...partInfo.map((part, i) => {
-      const row = document.createElement("div");
-      row.className = "part";
-      const swatch = document.createElement("i");
-      swatch.className = "swatch";
-      swatch.style.borderColor = noteView.partColor(i);
-      const label = document.createElement("span");
-      label.className = "part-name";
-      label.textContent = part.notes
-        ? `${part.name}: ${part.notes} notes, ${noteName(part.low)}-${noteName(part.high)}, typically ${part.velocity}`
-        : `${part.name}: no notes on the keys`;
-      const slider = document.createElement("input");
-      Object.assign(slider, { type: "range", min: -20, max: 20, step: 1, value: partOffsets[i] });
-      slider.setAttribute("aria-label", part.name + " offset");
-      const value = document.createElement("output");
-      const show = () => (value.textContent = (partOffsets[i] > 0 ? "+" : "") + partOffsets[i]);
+  partsList.replaceChildren(...partInfo.map((part, i) => {
+    const row = el("div", { class: "part" });
+    const swatch = el("i", { class: "swatch", style: `border-color:${noteView.partColor(i)}` });
+    const name = el("div", { class: "part-name" }, el("strong", {}, part.name),
+      el("span", {}, part.notes
+        ? `${part.notes} notes, ${noteName(part.low)}–${noteName(part.high)}, typically ${part.velocity}`
+        : "no notes on the keys"));
+    const slider = el("input", { type: "range", min: -20, max: 20, step: 1, value: partOffsets[i], "aria-label": part.name + " offset" });
+    const value = el("output");
+    const show = () => (value.textContent = (partOffsets[i] > 0 ? "+" : "") + partOffsets[i]);
+    show();
+    slider.addEventListener("input", () => {
+      partOffsets[i] = Number(slider.value);
       show();
-      slider.addEventListener("input", () => {
-        partOffsets[i] = Number(slider.value);
-        show();
-        dynamicsChanged();
-      });
-      // Mute: left out, as if the file didn't have it (never every part).
-      const mute = document.createElement("button");
-      mute.type = "button";
-      mute.className = "mute";
-      const showMute = () => {
-        mute.textContent = partMuted[i] ? "Muted" : "Mute";
-        mute.setAttribute("aria-pressed", String(partMuted[i]));
-        row.classList.toggle("muted", partMuted[i]);
-        slider.disabled = partMuted[i];
-      };
+      dynamicsChanged();
+    });
+    // Mute: left out, as if the file didn't have it (never every part).
+    const mute = el("button", { class: "btn btn-sm btn-icon mute", type: "button" });
+    const showMute = () => {
+      mute.innerHTML = icon(partMuted[i] ? "mute" : "volume");
+      mute.setAttribute("aria-pressed", String(partMuted[i]));
+      mute.setAttribute("aria-label", (partMuted[i] ? "Unmute " : "Mute ") + part.name);
+      mute.title = partMuted[i] ? "Muted: click to bring it back" : "Mute: leave this track out";
+      row.classList.toggle("muted", partMuted[i]);
+      slider.disabled = partMuted[i];
+    };
+    showMute();
+    mute.addEventListener("click", () => {
+      const others = partInfo.filter((p, j) => p.notes > 0 && !partMuted[j] && j !== i).length;
+      if (!partMuted[i] && others === 0) {
+        ui.toast("Every other track is muted: unmute one first");
+        return;
+      }
+      partMuted[i] = !partMuted[i];
       showMute();
-      mute.addEventListener("click", () => {
-        const playing = partInfo.filter((p, j) => p.notes > 0 && !partMuted[j] && j !== i).length;
-        if (!partMuted[i] && playing === 0) {
-          message.classList.remove("error");
-          message.textContent = "Every other track is muted: unmute one first";
-          return;
-        }
-        partMuted[i] = !partMuted[i];
-        showMute();
-        dynamicsChanged();
-      });
-      row.append(swatch, label, slider, value, mute);
-      return row;
-    }),
-  );
+      dynamicsChanged();
+    });
+    row.append(swatch, name, slider, value, mute);
+    return row;
+  }));
 }
 
 // How many repeats are merged (not struck) and boosted, as the controller
@@ -195,108 +188,101 @@ function showRepeats(notes) {
     (boosted ? `; ${boosted} played louder to strike again` : "");
 }
 
+// The piece's notes as the file has them, and how many are struck with the
+// settings now (merged repeats, doubled notes and muted tracks aren't): from
+// the note view, which follows every change at once.
+let noteCounts = null;
+let pieceDuration = "";
+function showMeta() {
+  if (!hasPiece) return;
+  const counts = noteCounts
+    ? `${noteCounts.written.toLocaleString()} notes` +
+      (noteCounts.played !== noteCounts.written ? ` · ${noteCounts.played.toLocaleString()} played` : "")
+    : "";
+  pieceMeta.textContent = [counts, pieceDuration].filter(Boolean).join(" · ");
+  pieceMeta.title = noteCounts && noteCounts.played !== noteCounts.written
+    ? "Played: struck with the settings now, without merged repeats, doubled notes and muted tracks" : "";
+}
+
 noteView.onLoaded((notes) => {
+  const MERGED = 1, DUPLICATE = 32, MUTED = 128;
+  noteCounts = notes ? { written: notes.length,
+    played: notes.filter((n) => !(n.changes & (MERGED | DUPLICATE | MUTED))).length } : null;
+  showMeta();
   showRepeats(notes);
   pieceNotes = notes ? shapedNotes(notes) : null;
   velocitySection.hidden = !pieceNotes;
   drawVelocities();
 });
 
-function formatTime(ms) {
-  const seconds = Math.floor(ms / 1000);
-  return Math.floor(seconds / 60) + ":" + String(seconds % 60).padStart(2, "0");
-}
-
-async function request(url, options) {
-  try {
-    const response = await fetch(url, options);
-    const body = await response.json();
-    if (!response.ok) {
-      // (A success leaves any message to fade: it may be about something else.)
-      message.textContent = body.error;
-      message.classList.add("error");
-    }
-    return response.ok ? body : null;
-  } catch (error) {
-    message.textContent = "request failed: " + error.message;
-    message.classList.add("error");
-    return null;
-  }
-}
-
+// ---- adding a piece ----
 fileInput.addEventListener("change", async () => {
   const file = fileInput.files[0];
-  if (!file) {
-    return;
-  }
-  message.textContent = "";
-  message.classList.remove("error");
+  if (!file) return;
   uploading = true;
   showBusy();
-  const summary = await request(
-    "/api/midi?name=" + encodeURIComponent(file.name),
-    {
+  closeLibrary();
+  let summary = null;
+  try {
+    summary = await ui.api("/api/midi?name=" + encodeURIComponent(file.name), {
       method: "POST",
       headers: { "Content-Type": "application/octet-stream" },
       body: file,
-    },
-  );
+    });
+  } catch (error) {
+    ui.toast(`Couldn't load ${file.name}: ${error.message}`, { error: true });
+  }
   uploading = false;
   showBusy();
   loadLibrary();
-  if (!summary) {
-    message.textContent = `Couldn't load ${file.name}: ${message.textContent}`;
-  } else {
-    const notices = [];
-    if (summary.skippedNotes > 0) {
-      notices.push(
-        summary.skippedNotes + " notes outside the 88 keys were skipped",
-      );
-    }
-    if (summary.mergedNotes > 0) {
-      notices.push(
-        summary.mergedNotes +
-          " repeated notes were too fast to re-strike and were held instead",
-      );
-    }
-    if (summary.duplicateNotes > 0) {
-      notices.push(
-        summary.duplicateNotes + " notes the file has twice at once were played once",
-      );
-    }
-    const saved = {
-      saved: "Saved in the library",
-      already: `Already in the library as “${summary.title}”: loaded with its settings`,
-      full: "The library is full, so it wasn't saved (delete some pieces to make room)",
-      unavailable: "Not saved: the controller has no library space (upload the firmware with the new partition table)",
-      failed: "Couldn't save it in the library",
-    }[summary.library];
-    if (saved) notices.unshift(saved);
-    message.textContent = notices.join("; ");
-  }
   fileInput.value = "";
-  refresh();
+  if (!summary) return;
+  const notices = [];
+  const saved = {
+    saved: "Saved in the library",
+    already: `Already in the library as “${summary.title}”: loaded with its settings`,
+    full: "The library is full, so it wasn't saved (delete some pieces to make room)",
+    unavailable: "Not saved: the piano has no library space (upload the firmware with the new partition table)",
+    failed: "Couldn't save it in the library",
+  }[summary.library];
+  if (saved) notices.push(saved);
+  if (summary.skippedNotes > 0) notices.push(`${summary.skippedNotes} notes outside the 88 keys were skipped`);
+  if (summary.mergedNotes > 0) notices.push(`${summary.mergedNotes} repeats too fast to strike again were held instead`);
+  if (summary.duplicateNotes > 0) notices.push(`${summary.duplicateNotes} notes the file has twice at once are played once`);
+  ui.toast(notices.join(". "), { error: summary.library === "full" || summary.library === "failed" });
+  ui.refreshStatus();
 });
 
-playButton.addEventListener("click", async () => {
-  // Paused, it goes on from where it stopped (or from where the bar was moved to).
-  const from = !paused && startFrom > 0 ? `?from=${startFrom}&speed=${pieceSpeed}` : "";
-  await request("/api/playback/play" + from, { method: "POST" });
-  refresh();
-  loadLibrary(); // its last played
+// ---- playing ----
+async function playOrPause() {
+  if (playButton.disabled) return;
+  if (playing) {
+    await ui.request("/api/playback/pause", { method: "POST" });
+  } else {
+    // Paused, it goes on from where it stopped (or from where the bar was moved to).
+    const from = !paused && startFrom > 0 ? `?from=${startFrom}&speed=${pieceSpeed}` : "";
+    await ui.request("/api/playback/play" + from, { method: "POST" });
+    loadLibrary(); // its last played
+  }
+  ui.refreshStatus();
+}
+playButton.addEventListener("click", playOrPause);
+stopButton.addEventListener("click", async () => {
+  await ui.request("/api/playback/stop", { method: "POST" });
+  ui.refreshStatus();
 });
-
-pauseButton.addEventListener("click", async () => {
-  await request("/api/playback/pause", { method: "POST" });
-  refresh();
+// Space plays and pauses (not while typing).
+document.addEventListener("keydown", (event) => {
+  if (event.code === "Space" && !ui.typing(event.target) && !event.target.closest("button, a, [role=menu]")) {
+    event.preventDefault();
+    playOrPause();
+  }
 });
 
 progress.addEventListener("input", () => {
   seeking = true;
-  time.textContent =
-    formatTime(Number(progress.value)) + " / " + formatTime(durationMs);
+  timeNow.textContent = formatTime(Number(progress.value));
 });
-
 progress.addEventListener("change", () => goTo(Number(progress.value)));
 
 // Clicking the notes picks a point too.
@@ -304,19 +290,15 @@ noteView.onPick((ms) => goTo(Math.min(ms, durationMs)));
 
 async function goTo(ms) {
   if (playing || paused) {
-    await request(`/api/playback/seek?to=${ms}&speed=${pieceSpeed}`, { method: "POST" });
+    await ui.request(`/api/playback/seek?to=${ms}&speed=${pieceSpeed}`, { method: "POST" });
   } else {
     startFrom = ms;
   }
   seeking = false;
-  refresh();
+  ui.refreshStatus();
 }
 
-stopButton.addEventListener("click", async () => {
-  await request("/api/playback/stop", { method: "POST" });
-  refresh();
-});
-
+// ---- the sound settings ----
 // Volume, contrast, voicing and each part's offset shape every velocity;
 // they apply from the next Play. A new speed applies at once when nothing's
 // playing (the controller rebuilds the piece), else after a pause.
@@ -336,23 +318,26 @@ function dynamicsChanged() {
   drawVelocities();
   clearTimeout(dynamicsTimer);
   dynamicsTimer = setTimeout(async () => {
-    const saved = await request("/api/dynamics", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(settings()),
-    });
+    const saved = await ui.request("/api/dynamics", { json: settings() });
     dynamicsChanging = false;
     showButtons();
     if (saved) {
       noteView.load(); // merges and limits depend on the velocities
-      volumeNote.textContent = playing ? "applies from the next Play, or after a pause" : "";
+      volumeNote.textContent = playing ? "The new settings apply from the next Play, or after a pause." : "";
     }
   }, 300);
 }
 
 [speed, volume, contrast, voicing, repeatBoost].forEach((slider) => slider.addEventListener("input", dynamicsChanged));
 
-resetButton.addEventListener("click", () => {
+resetButton.addEventListener("click", async () => {
+  const sure = await ui.confirm({
+    title: "Reset the sound settings?",
+    message: "Speed, volume, contrast, voicing and repeats go back to their defaults, and every track to as written " +
+      "(unmuted, no offset). This piece then remembers the defaults.",
+    confirm: "Reset", danger: true,
+  });
+  if (!sure) return;
   volume.value = 100;
   speed.value = 100;
   contrast.value = 100;
@@ -364,54 +349,31 @@ resetButton.addEventListener("click", () => {
   dynamicsChanged();
 });
 
-// The solenoids' heat, when the controller watches it (their coils measured):
-// a line under the piece's name, or while one is warm or hot (Play waits for
-// it to cool), a banner at the top that stays until it has.
-const heatLine = document.getElementById("heat");
-const heatAlert = document.getElementById("heat-alert");
-function showHeat(heat) {
-  const watched = Boolean(heat && heat.watched);
-  const cooling = watched && heat.load >= heat.resumeLoad;
-  heatLine.hidden = !watched || cooling;
-  heatAlert.hidden = !cooling;
-  if (!watched) return;
-  const name = (channel) => (channel >= 88 ? "the pedal solenoids" : `${noteName(channel + 21)}'s solenoid`);
-  const minutes = (s) => (s < 60 ? "under a minute" : `about ${Math.ceil(s / 60)} min`);
-  const degrees = (c) => `${c.toFixed(0)} °C`;
-  const stopped = { paused: "Paused", testStopped: "Test stopped", released: "Let go" }[heat.action];
-  if (!cooling) {
-    heatLine.textContent = `Solenoid heat: warmest is ${name(heat.channel)}, ${degrees(heat.riseC)} of ` +
-      `${degrees(heat.limitC)} allowed`;
-    return;
-  }
-  heatAlert.classList.toggle("hot", Boolean(stopped));
-  heatAlert.textContent = stopped
-    ? `${stopped}: ${name(heat.actionChannel)} reached the heat limit. Play can go on once ` +
-      `${heat.actionChannel >= 88 ? "they've" : "it's"} cooled, in ${minutes(heat.coolS)}.`
-    : `Warm: ${name(heat.channel)} at ${degrees(heat.riseC)} of the ${degrees(heat.limitC)} allowed. ` +
-      `Play waits until under ${degrees(heat.limitC * heat.resumeLoad)}, in ${minutes(heat.coolS)}.`;
+// ---- the library sheet (narrow screens) ----
+const librarySheet = document.getElementById("library");
+const libraryBackdrop = document.getElementById("library-backdrop");
+function openLibrary() {
+  librarySheet.classList.add("open");
+  libraryBackdrop.hidden = false;
 }
+function closeLibrary() {
+  librarySheet.classList.remove("open");
+  libraryBackdrop.hidden = true;
+}
+document.getElementById("library-open").addEventListener("click", openLibrary);
+document.getElementById("empty-library").addEventListener("click", openLibrary);
+document.getElementById("library-close").addEventListener("click", closeLibrary);
+libraryBackdrop.addEventListener("click", closeLibrary);
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && librarySheet.classList.contains("open")) closeLibrary();
+});
 
-async function refresh() {
-  let status, sampledAt;
-  try {
-    const sent = performance.now();
-    const response = await fetch("/api/status");
-    sampledAt = (sent + performance.now()) / 2; // about when the controller read its position
-    status = await response.json();
-  } catch (error) {
-    return;
-  }
+// ---- following the controller ----
+function show(status, receivedAt) {
   const playback = status.playback;
-  showHeat(status.heat);
-  // An update over Wi-Fi: Play waits, and the controller restarts after it.
-  const update = status.update || { kind: "none" };
-  const updateAlert = document.getElementById("update-alert");
-  updateAlert.hidden = update.kind === "none";
-  updateAlert.textContent = `Updating the ${update.kind === "firmware" ? "firmware" : "web pages"} over Wi-Fi: ` +
-    `${update.percent}%. The controller restarts when it's done.`;
+  const heat = status.heat;
+  heatLine.textContent = heat && heat.watched && heat.load < heat.resumeLoad ? ui.heatText(heat).line : "";
   controllerBuilding = Boolean(playback.building);
-  showBusy();
   const wasActive = playing || paused;
   const wasPlaying = playing;
   playing = playback.state === "playing";
@@ -448,8 +410,15 @@ async function refresh() {
     loadedPiece = pieceKey;
     startFrom = 0;
     pieceNotes = null;
-    loadPiece();
-    noteView.load(true); // a new piece: its notes from the start
+    noteCounts = null;
+    if (pieceKey) {
+      loadPiece();
+      noteView.load(true); // a new piece: its notes from the start
+    } else {
+      notesSection.hidden = true;
+      velocitySection.hidden = true;
+      partsSection.hidden = true;
+    }
   }
   if (!playing) {
     volumeNote.textContent = "";
@@ -462,41 +431,37 @@ async function refresh() {
     loadedLibraryId = libraryId;
     drawLibrary();
   }
+  document.getElementById("player-empty").hidden = Boolean(playback.piece);
+  document.getElementById("transport").hidden = !playback.piece;
+  progress.closest(".scrubber").hidden = !playback.piece;
   if (playback.piece) {
     const saved = libraryPieces.find((p) => p.id === libraryId);
     piece.textContent = saved ? saved.name : playback.piece.title;
-    pieceMeta.textContent = `${playback.piece.notes.toLocaleString()} notes · ${formatTime(playback.piece.durationMs)}`;
+    document.title = `${piece.textContent} · Player piano`;
+    pieceDuration = formatTime(playback.piece.durationMs) + (builtAt !== 100 ? ` at ${builtAt}%` : "");
     durationMs = playback.piece.durationMs;
     progress.max = Math.max(durationMs, 1);
+    timeTotal.textContent = formatTime(durationMs);
     if (!seeking) {
-      const position =
-        playing || paused
-          ? Math.min(playback.positionMs, durationMs)
-          : startFrom;
+      const position = playing || paused ? Math.min(playback.positionMs, durationMs) : startFrom;
       progress.value = position;
-      time.textContent = formatTime(position) + " / " + formatTime(durationMs);
+      timeNow.textContent = formatTime(position);
     }
   } else {
     piece.textContent = "No piece loaded";
-    pieceMeta.textContent = "Pick one from the library, or add one.";
-    time.textContent = "";
+    document.title = "Play · Player piano";
+    pieceMeta.textContent = "Choose one from the library, or add a MIDI file.";
     durationMs = 0;
     progress.value = 0;
   }
   progress.disabled = !playback.piece;
   if (!seeking) {
-    noteView.update(
-      playing,
-      playback.positionMs,
-      paused ? playback.positionMs : startFrom,
-      sampledAt,
-    );
+    noteView.update(playing, playback.positionMs, paused ? playback.positionMs : startFrom, receivedAt);
   }
-
   hasPiece = Boolean(playback.piece);
-  showButtons();
+  showMeta();
+  showBusy();
 }
 
-refresh();
+ui.onStatus(show);
 loadLibrary();
-setInterval(refresh, 500);

@@ -12,12 +12,46 @@
 #include "wifi_station.h"
 #include <LittleFS.h>
 
-WebServerModule::WebServerModule() : server(80)
+static const uint32_t STREAM_CHECK_MS = 100;
+static const uint32_t STREAM_MIN_MS = 200;
+static const uint32_t STREAM_HEARTBEAT_MS = 3000;
+
+WebServerModule::WebServerModule() : server(80), events("/api/events")
 {
+}
+
+std::string WebServerModule::statusJson()
+{
+  JsonDocument doc;
+  writeStatus(doc.to<JsonObject>(), *piano, *wifi, *ota);
+  std::string json;
+  serializeJson(doc, json);
+  return json;
+}
+
+void WebServerModule::poll()
+{
+  uint32_t now = millis();
+  if (piano == nullptr || now - lastCheckMs < STREAM_CHECK_MS || events.count() == 0)
+  {
+    return;
+  }
+  lastCheckMs = now;
+  std::string json = statusJson();
+  bool changed = json != lastSent;
+  if ((changed && now - lastSentMs >= STREAM_MIN_MS) || now - lastSentMs >= STREAM_HEARTBEAT_MS)
+  {
+    events.send(json.c_str(), "status");
+    lastSent = json;
+    lastSentMs = now;
+  }
 }
 
 bool WebServerModule::begin(PianoController &piano, PieceLibrary &library, WiFiStationModule &wifi, OtaUpdates &ota)
 {
+  this->piano = &piano;
+  this->wifi = &wifi;
+  this->ota = &ota;
   if (!LittleFS.begin(true))
   {
     Serial.println("LittleFS mount failed");
@@ -34,6 +68,21 @@ bool WebServerModule::begin(PianoController &piano, PieceLibrary &library, WiFiS
   registerStatusRoutes(server, piano, wifi, ota);
   registerSystemRoutes(server, wifi, ota);
 
+  // The live status: each page gets it at once on connecting, then as it changes.
+  events.onConnect([this](AsyncEventSourceClient *client) { client->send(statusJson().c_str(), "status", 0, 2000); });
+  server.addHandler(&events);
+
+  // The pages: Play is the start, and the old pages' addresses lead to where
+  // they went.
+  auto redirect = [this](const char *from, const char *to) {
+    server.on(from, HTTP_GET, [to](AsyncWebServerRequest *request) { request->redirect(to); });
+  };
+  redirect("/", "/play/");
+  redirect("/test", "/keys/");
+  redirect("/config", "/settings/#rules");
+  redirect("/wifi", "/settings/#wifi");
+  redirect("/backup", "/settings/#backup");
+
   // Each page is a folder under data/www/ with its own index.html,
   // e.g. data/www/test/index.html is served at /test.
   server.serveStatic("/", LittleFS, "/www/").setDefaultFile("index.html");
@@ -48,7 +97,7 @@ bool WebServerModule::begin(PianoController &piano, PieceLibrary &library, WiFiS
     {
       // On the setup network, phones checking for the internet (and anything
       // else) get the Wi-Fi page.
-      request->redirect("http://" + wifi.getIPAddress().toString() + "/wifi/");
+      request->redirect("http://" + wifi.getIPAddress().toString() + "/settings/#wifi");
       return;
     }
     request->send(404, "text/plain", "not found");

@@ -38,10 +38,21 @@ const noteView = (() => {
     }
     return colors;
   }
-  const COLORS = {
-    background: "#fff", blackRow: "#f4f3ef", line: "#e1e0d9", text: "#5f5e5a",
-    written: "#8a8984", played: "#2a78d6", changed: "#e07b28", merged: "#d03b3b", playhead: "#1d1c1a"
-  };
+  // The theme's colours (app.css), read again whenever it changes.
+  let COLORS = {};
+  function readColors() {
+    const t = ui.token;
+    COLORS = {
+      background: t("--chart-bg"), blackRow: t("--chart-row"), line: t("--chart-line"), text: t("--chart-text"),
+      written: t("--chart-written"), played: t("--chart-played"), changed: t("--chart-changed"),
+      merged: t("--chart-merged"), muted: t("--chart-muted"), playhead: t("--chart-playhead"),
+    };
+  }
+  readColors();
+  ui.onTheme(() => {
+    readColors();
+    redraw();
+  });
   const GUTTER = 28;     // px for the C labels
   const PEDAL_ROW = 10;  // px per pedal band
   const AXIS = 16;       // px for the time labels
@@ -89,7 +100,9 @@ const noteView = (() => {
 
   function layout() {
     const rows = highKey - lowKey + 1;
-    const rowHeight = Math.max(6, Math.min(16, Math.floor(560 / rows)));
+    // At most about half the screen's height (560 px on a large one).
+    const budget = Math.max(220, Math.min(560, window.innerHeight * 0.5));
+    const rowHeight = Math.max(4, Math.min(16, Math.floor(budget / rows)));
     const width = canvas.clientWidth || 600;
     const height = rows * rowHeight + 2 * PEDAL_ROW + 6 + AXIS;
     return { rows, rowHeight, width, height, plot: width - GUTTER };
@@ -123,7 +136,7 @@ const noteView = (() => {
 
     ctx.fillStyle = COLORS.background;
     ctx.fillRect(0, 0, l.width, l.height);
-    ctx.font = "10px sans-serif";
+    ctx.font = "10px system-ui, sans-serif";
     ctx.textBaseline = "middle";
     for (let key = lowKey; key <= highKey; key++) {
       const y = yOf(key, l);
@@ -155,15 +168,17 @@ const noteView = (() => {
       if (note.changes & MUTED) {
         // Left out: a faint dashed outline, as written.
         ctx.setLineDash([3, 3]);
-        ctx.strokeStyle = "#a8a7a1";
+        ctx.strokeStyle = COLORS.muted;
         ctx.lineWidth = 1;
         ctx.strokeRect(x + 0.5, y + 0.5, Math.max(xOf(note.writtenOff + shift, l) - x - 1, 1), l.rowHeight - 1);
         ctx.setLineDash([]);
         continue;
       }
       if (note.changes & MERGED) {
-        ctx.fillStyle = COLORS.merged + "40";
+        ctx.globalAlpha = 0.25;
+        ctx.fillStyle = COLORS.merged;
         ctx.fillRect(x, y + 0.5, Math.max(xOf(note.writtenOff + shift, l) - x, 2), l.rowHeight - 1);
+        ctx.globalAlpha = 1;
         ctx.strokeStyle = COLORS.merged;
         ctx.lineWidth = 1.5;
         ctx.strokeRect(x, y + 0.75, Math.max(xOf(note.writtenOff + shift, l) - x, 2), l.rowHeight - 1.5);
@@ -194,8 +209,10 @@ const noteView = (() => {
         if (x2 < GUTTER || x1 > l.width) continue;
         const y = pedalTop + row * PEDAL_ROW;
         if (filled) {
-          ctx.fillStyle = COLORS.played + "70";
+          ctx.globalAlpha = 0.45;
+          ctx.fillStyle = COLORS.played;
           ctx.fillRect(x1, y + 1, Math.max(x2 - x1, 1), PEDAL_ROW - 2);
+          ctx.globalAlpha = 1;
         } else {
           ctx.strokeStyle = COLORS.written;
           ctx.lineWidth = 1;
@@ -356,14 +373,42 @@ const noteView = (() => {
   prevButton.addEventListener("click", () => step(-1));
   nextButton.addEventListener("click", () => step(1));
 
-  // ---- dragging, clicking, zooming, hovering ----
+  // ---- dragging, clicking, zooming (pinching), hovering ----
   let drag = null;
+  const touches = new Map(); // pointerId -> x, while down
+  let pinch = null; // {distance, span, at}: two fingers down
   canvas.addEventListener("pointerdown", (event) => {
-    drag = { x: event.clientX, viewStart, moved: false };
+    touches.set(event.pointerId, event.clientX);
     canvas.setPointerCapture(event.pointerId);
+    if (touches.size === 2) {
+      const [a, b] = [...touches.values()];
+      const rect = canvas.getBoundingClientRect();
+      pinch = { distance: Math.max(Math.abs(a - b), 20), span, at: timeOf((a + b) / 2 - rect.left, layout()) };
+      drag = null;
+      return;
+    }
+    drag = { x: event.clientX, viewStart, moved: false };
+  });
+  const lift = (event) => {
+    touches.delete(event.pointerId);
+    if (touches.size < 2) pinch = null;
+  };
+  canvas.addEventListener("pointercancel", (event) => {
+    lift(event);
+    drag = null;
   });
   canvas.addEventListener("pointermove", (event) => {
     const rect = canvas.getBoundingClientRect();
+    if (touches.has(event.pointerId)) touches.set(event.pointerId, event.clientX);
+    if (pinch && touches.size === 2) {
+      const [a, b] = [...touches.values()];
+      const l = layout();
+      span = Math.min(MAX_SPAN, Math.max(MIN_SPAN, (pinch.span * pinch.distance) / Math.max(Math.abs(a - b), 20)));
+      const middle = (a + b) / 2 - rect.left;
+      if (!playing) viewStart = pinch.at - ((middle - GUTTER) / l.plot) * span;
+      redraw();
+      return;
+    }
     if (drag) {
       const dx = event.clientX - drag.x;
       if (Math.abs(dx) > 4) drag.moved = true;
@@ -390,6 +435,7 @@ const noteView = (() => {
   });
   canvas.addEventListener("pointerleave", () => { hovered = null; tip.hidden = true; });
   canvas.addEventListener("pointerup", (event) => {
+    lift(event);
     if (drag && !drag.moved) {
       const rect = canvas.getBoundingClientRect();
       const t = timeOf(event.clientX - rect.left, layout());

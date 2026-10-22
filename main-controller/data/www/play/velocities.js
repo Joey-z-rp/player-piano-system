@@ -138,7 +138,7 @@ function drawVelocities() {
       x2: W - m.right,
       y1: H - m.bottom,
       y2: H - m.bottom,
-      stroke: "#e1e0d9",
+      stroke: ui.token("--chart-line"),
     }),
   );
   playedBins.forEach((bin, i) => {
@@ -153,12 +153,12 @@ function drawVelocities() {
         width,
         height: h,
         rx: Math.min(2, h / 2),
-        fill: "#2a78d6",
+        fill: ui.token("--chart-played"),
       }),
     );
     if (bin.count > top) {
       svg.append(
-        svgEl("rect", { x, y: m.top + 6, width, height: 3, fill: "#fff" }),
+        svgEl("rect", { x, y: m.top + 6, width, height: 3, fill: ui.token("--chart-bg") }),
       );
       const label = svgEl("text", {
         x: x + width / 2,
@@ -179,7 +179,7 @@ function drawVelocities() {
         width: Math.max(slot - 3.5, 1),
         height: H - m.bottom - y(bin.count),
         fill: "none",
-        stroke: "#8a8984",
+        stroke: ui.token("--chart-written"),
         "stroke-width": 1.5,
       }),
     );
@@ -207,7 +207,7 @@ function drawVelocities() {
       x2: W - m.right,
       y1: y(guide),
       y2: y(guide),
-      stroke: "#e1e0d9",
+      stroke: ui.token("--chart-line"),
       "stroke-dasharray": "3 3",
     }),
   );
@@ -218,6 +218,8 @@ function drawVelocities() {
     "text-anchor": "end",
   });
   guideLabel.textContent = guide + " notes per bar";
+  // A halo in the background colour, so it reads over a bar.
+  guideLabel.style.cssText = `paint-order: stroke; stroke: ${ui.token("--chart-bg")}; stroke-width: 4px; stroke-linejoin: round;`;
   svg.append(guideLabel);
 
   const tip = document.createElement("div");
@@ -251,3 +253,7 @@ function drawVelocities() {
 }
 
 window.addEventListener("resize", drawVelocities);
+// Drawn again at its new width (the layout changes with the screen), and in
+// the other theme's colours.
+new ResizeObserver(() => drawVelocities()).observe(velocityChart);
+ui.onTheme(drawVelocities);
