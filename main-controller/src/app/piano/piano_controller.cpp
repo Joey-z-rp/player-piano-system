@@ -583,7 +583,7 @@ void PianoController::sendRollEvent(const RollEvent &event)
   switch (event.type)
   {
   case RollEventType::KeyPress:
-    sendPress(event.key, event.velocity, event.pedal, event.repeat);
+    sendPress(event);
     break;
   case RollEventType::KeyRelease:
     if (skipReleases.test(event.key))
@@ -638,11 +638,11 @@ bool PianoController::send(const char *command)
   return true;
 }
 
-void PianoController::sendPress(uint8_t key, uint8_t velocity, bool pedal, bool repeat)
+void PianoController::sendPress(const RollEvent &event)
 {
   char command[DRIVER_COMMAND_MAX_LENGTH + 1];
-  velocityTable->pressCommand(key, velocity, command, sizeof(command), pedal,
-                              repeat ? &playingConfig.repeatClamp : nullptr);
+  velocityTable->strikeCommand(event.key, event.duty, event.landingMs, command, sizeof(command), event.pedal,
+                               event.repeat ? &playingConfig.repeatClamp : nullptr);
   send(command);
 }
 

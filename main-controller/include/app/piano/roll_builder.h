@@ -72,7 +72,7 @@ static const uint32_t CHORD_WINDOW_MS = 40;
 // Where to pick up a roll part way through, so the notes that sound from
 // fromMs on its timeline play. The clock starts the roll's lead earlier, so
 // their presses are sent in time; presses in that lead whose notes sound
-// before fromMs (by timing's landing times) are skipped, so resuming from a
+// before fromMs (by their landing times) are skipped, so resuming from a
 // pause doesn't strike them twice. Notes already held aren't struck (a hammer
 // can't start a note half way through), so their releases are skipped too;
 // the pedal is pressed first if it's down at the start.

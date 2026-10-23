@@ -2,30 +2,25 @@
 #include "web/api_response.h"
 #include "app/piano/piano_controller.h"
 #include <AsyncJson.h>
+#include <memory>
 
 static void sendOffsets(AsyncWebServerRequest *request, PianoController &piano, int status = 200)
 {
   request->send(status, "application/json", piano.keyOffsetsJson().c_str());
 }
 
-// Reads one of a key's curves from the request's JSON.
-static bool readCurve(JsonVariant value, OffsetCurve &curve, std::string &error)
-{
-  std::string json;
-  serializeJson(value, json);
-  return readOffsetCurve(json.data(), json.size(), curve, error);
-}
-
 void registerOffsetRoutes(AsyncWebServer &server, PianoController &piano)
 {
   // GET /api/offsets -> {"keys": {"44": {"up": [[velocity, offset], ...],
-  // "pedal": [...]}, ...}}: only keys with offsets, "pedal" only where a key
-  // has its own pedal-down curve.
+  // "pedal": [...], "duty": [[velocity, duty change %], ...], "duty_pedal":
+  // [...]}, ...}}: only keys with something set; "pedal", "duty" and
+  // "duty_pedal" only where a key has them (key_offsets.h readKeyEntry).
   server.on("/api/offsets", HTTP_GET, [&piano](AsyncWebServerRequest *request) { sendOffsets(request, piano); });
 
-  // POST /api/offsets/key {"key": 44, "up": [[64, -4]], "pedal": [[64, -2]]}
-  // sets one key's curves: "up" ([] for none), and its own "pedal" one (left
-  // out or null: none, it uses "up" with the pedal down too). -> all of them.
+  // POST /api/offsets/key {"key": 44, "up": [[64, -4]], "pedal": [[64, -2]],
+  // "duty": [[64, 0], [127, 23]], "duty_pedal": [...]} sets all of one key's
+  // curves: any left out or null is none ("pedal" and "duty_pedal": it uses
+  // the pedal-up one with the pedal down too). -> all keys'.
   AsyncCallbackJsonWebHandler *keyHandler = new AsyncCallbackJsonWebHandler(
       "/api/offsets/key", [&piano](AsyncWebServerRequest *request, JsonVariant &json) {
         long key = json["key"] | -1L;
@@ -34,16 +29,15 @@ void registerOffsetRoutes(AsyncWebServer &server, PianoController &piano)
           sendError(request, 400, "key must be 0-87");
           return;
         }
-        OffsetCurve up, pedal;
-        std::string error;
-        bool hasPedal = !json["pedal"].isNull();
-        if ((!json["up"].isNull() && !readCurve(json["up"], up, error)) ||
-            (hasPedal && !readCurve(json["pedal"], pedal, error)))
+        std::string body, error;
+        serializeJson(json, body);
+        KeyOffsets::Entry entry;
+        if (!readKeyEntry(body.data(), body.size(), entry, error))
         {
           sendError(request, 400, error.c_str());
           return;
         }
-        piano.setKeyOffsets((uint8_t)key, up, hasPedal ? &pedal : nullptr);
+        piano.setKeyOffsets((uint8_t)key, entry);
         sendOffsets(request, piano);
       });
   keyHandler->setMethod(HTTP_POST);
@@ -62,13 +56,13 @@ void registerOffsetRoutes(AsyncWebServer &server, PianoController &piano)
       "/api/offsets", [&piano](AsyncWebServerRequest *request, JsonVariant &json) {
         std::string body, error;
         serializeJson(json, body);
-        KeyOffsets offsets;
-        if (!readKeyOffsets(body.data(), body.size(), offsets, error))
+        std::unique_ptr<KeyOffsets> offsets(new KeyOffsets()); // ~9 KB: not on the stack
+        if (!readKeyOffsets(body.data(), body.size(), *offsets, error))
         {
           sendError(request, 400, error.c_str());
           return;
         }
-        piano.setAllKeyOffsets(offsets);
+        piano.setAllKeyOffsets(*offsets);
         sendOffsets(request, piano);
       });
   allHandler->setMethod(HTTP_POST);

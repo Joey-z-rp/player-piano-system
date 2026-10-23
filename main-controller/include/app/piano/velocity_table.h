@@ -18,6 +18,10 @@ static const uint16_t DUTY_FULL = 10000;
 // Longest landing time accepted from a table, in ms.
 static const uint16_t MAX_LANDING_MS = 1000;
 
+// Keys on each side whose landing times guide a key's struck louder than its
+// table goes (a duty change; see landingMs).
+static const uint8_t LANDING_NEIGHBOURS = 4;
+
 // Most steps a key's stepped drive setting can have (see KeySetting).
 static const uint8_t MAX_SETTING_STEPS = 6;
 
@@ -81,18 +85,23 @@ public:
 
   // Each of these takes whether the pedal is down: with it down, a key with a
   // "pedal" entry plays from that, and any other key as with it up. Lookups
-  // by velocity play the key's offset one (see setOffsets).
+  // by velocity play the key's offset one, plus its duty change (see
+  // setOffsets).
 
-  // The per-key offsets (key_offsets.h) every lookup by velocity goes
-  // through; null for none. Safe to swap while others read.
+  // The per-key offsets and duty changes (key_offsets.h) every lookup by
+  // velocity goes through; null for none. Safe to swap while others read.
   void setOffsets(std::shared_ptr<const KeyOffsets> offsets);
   std::shared_ptr<const KeyOffsets> offsets() const;
   // The velocity the key plays for this one, with its offset.
   uint8_t playedVelocity(uint8_t key, uint8_t velocity, bool pedal = false) const;
 
-  // In hundredths of a percent.
+  // The key's duty change at this velocity, in hundredths (0 for none).
+  int16_t dutyChange(uint8_t key, uint8_t velocity, bool pedal = false) const;
+
+  // In hundredths of a percent: the table's at the played velocity, plus the
+  // duty change, within 0-100%.
   uint16_t duty(uint8_t key, uint8_t velocity, bool pedal = false) const;
-  // As the table has it, without the key's offset.
+  // As the table has it, without the key's offset or duty change.
   uint16_t tableDuty(uint8_t key, uint8_t velocity, bool pedal = false) const;
   bool isCalibrated(uint8_t key) const;
   size_t calibratedKeys() const;
@@ -104,12 +113,21 @@ public:
   bool hasLanding() const;
   // Ms from the press until the key's hammer lands at this velocity: the
   // key's own, else the shared curve's, else 0 (unknown). With the pedal
-  // down, a key with a "pedal" entry has only that entry's.
+  // down, a key with a "pedal" entry has only that entry's. With a duty
+  // change, the landing for the duty it's struck with (landingAtDuty).
   uint16_t landingMs(uint8_t key, uint8_t velocity, bool pedal = false) const;
-  // As the table has it, without the key's offset.
+  // As the table has it, without the key's offset or duty change.
   uint16_t tableLandingMs(uint8_t key, uint8_t velocity, bool pedal = false) const;
+  // The landing for a strike at this duty: along the key's own duties and
+  // landing times (between two velocities' duties, interpolated; below its
+  // softest, its softest's). Above its loudest, its loudest's made sooner by
+  // the median of how much sooner its LANDING_NEIGHBOURS each side (those
+  // with their own landing times, measured louder than it) land from its
+  // loudest duty to this one (or to their own loudest).
+  uint16_t landingAtDuty(uint8_t key, uint16_t duty, bool pedal = false) const;
   // The latest landing of any key at any velocity, either way (in the table:
-  // offsets only pick other velocities' times).
+  // offsets pick other velocities' times, duty changes times between them,
+  // or sooner).
   uint16_t maxLandingMs() const;
 
   // How presses are driven: the table's "drive", or the defaults.
@@ -136,6 +154,11 @@ public:
   // (PlayConfig::repeatClamp; none if its ms is 0).
   void pressCommand(uint8_t key, uint8_t velocity, char *out, size_t size, bool pedal = false,
                     const ClampSettings *repeatClamp = nullptr) const;
+  // The same, for a strike already worked out: at strikeDuty (hundredths),
+  // the hammer landing landingMs after the press (0: unknown, a plain press).
+  // A roll's presses carry both (RollEvent), so playing one only formats it.
+  void strikeCommand(uint8_t key, uint16_t strikeDuty, uint16_t landingMs, char *out, size_t size, bool pedal = false,
+                     const ClampSettings *repeatClamp = nullptr) const;
 
   // Percent with up to two decimals, as the drivers take it: 3225 -> "32.25".
   static void formatDuty(char *text, size_t size, uint16_t duty);
@@ -162,6 +185,7 @@ public:
 private:
   // The layer a key plays from: its "pedal" entry's with the pedal down, if it has one.
   const Layer &layer(uint8_t key, bool pedal) const;
+  uint16_t landingAlong(uint8_t key, uint16_t duty, bool pedal) const;
 
   Layer up;
   std::unique_ptr<Layer> down; // only when some key has a "pedal" entry (~60 KB)

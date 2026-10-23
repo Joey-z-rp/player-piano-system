@@ -1,4 +1,5 @@
 #include <unity.h>
+#include <memory>
 #include <algorithm>
 #include "app/piano/roll_builder.h"
 #include "app/piano/velocity_table.h"
@@ -638,6 +639,50 @@ void test_notes_under_the_pedal_use_its_landing_times()
   TEST_ASSERT_TRUE(presses[1].pedal);
 }
 
+void test_presses_carry_their_strike_as_the_table_plays_it()
+{
+  // C4 adjusted (an offset and a duty change); D4 not. Each press carries
+  // the duty and landing the table gives, so playing it sends the same
+  // command as working it out then would, repeats included.
+  static VelocityTable table = landingTable();
+  std::shared_ptr<KeyOffsets> offsets = std::make_shared<KeyOffsets>();
+  KeyOffsets::Entry c4;
+  c4.up.points[0] = {1, -5};
+  c4.up.count = 1;
+  c4.dutyUp.points[0] = {1, 1000};
+  c4.dutyUp.count = 1;
+  offsets->set(C4_KEY, c4);
+  table.setOffsets(offsets);
+  build({on(0, C4, 80), off(100, C4), on(160, C4, 80), off(300, C4), on(500, D4, 70), off(700, D4)}, &table);
+  size_t presses = 0;
+  for (const RollEvent &event : roll.events)
+  {
+    if (event.type != RollEventType::KeyPress)
+    {
+      continue;
+    }
+    presses++;
+    TEST_ASSERT_EQUAL_UINT16(table.duty(event.key, event.velocity, event.pedal), event.duty);
+    TEST_ASSERT_EQUAL_UINT16(table.landingMs(event.key, event.velocity, event.pedal), event.landingMs);
+    ClampSettings clamp = {-20, 100, 10000};
+    char worked[48], carried[48];
+    table.pressCommand(event.key, event.velocity, worked, sizeof(worked), event.pedal, event.repeat ? &clamp : nullptr);
+    table.strikeCommand(event.key, event.duty, event.landingMs, carried, sizeof(carried), event.pedal,
+                        event.repeat ? &clamp : nullptr);
+    TEST_ASSERT_EQUAL_STRING(worked, carried);
+  }
+  TEST_ASSERT_EQUAL(3, presses);
+  TEST_ASSERT_EQUAL_UINT16(VelocityTable::defaultDuty(75) + 1000, roll.events[0].duty); // velocity 80 - 5, + 10%
+  table.setOffsets(nullptr);
+}
+
+void test_presses_without_a_table_use_the_default_duty()
+{
+  build({on(0, C4, 64), off(100, C4)});
+  TEST_ASSERT_EQUAL_UINT16(VelocityTable::defaultDuty(64), roll.events[0].duty);
+  TEST_ASSERT_EQUAL_UINT16(0, roll.events[0].landingMs);
+}
+
 void test_pedal_counts_only_once_the_dampers_are_surely_up()
 {
   // C4 at velocity 100 is pressed 50 ms before it sounds (with the pedal up),
@@ -890,6 +935,8 @@ int main()
   RUN_TEST(test_louder_note_written_just_before_sounds_on_time);
   RUN_TEST(test_duplicate_note_is_played_once_and_reported_apart);
   RUN_TEST(test_notes_under_the_pedal_use_its_landing_times);
+  RUN_TEST(test_presses_carry_their_strike_as_the_table_plays_it);
+  RUN_TEST(test_presses_without_a_table_use_the_default_duty);
   RUN_TEST(test_pedal_counts_only_once_the_dampers_are_surely_up);
   RUN_TEST(test_part_offsets_move_each_part);
   RUN_TEST(test_voicing_stretches_each_chord_around_its_average);

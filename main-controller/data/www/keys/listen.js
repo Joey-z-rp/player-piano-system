@@ -43,4 +43,8 @@ $("repeat").addEventListener("click", async () => {
   }
 });
 
-$("stop").addEventListener("click", () => { letPedalUp(); post("/api/playback/stop", undefined, "stopped"); });
+$("stop").addEventListener("click", () => {
+  letPedalUp();
+  stopFlashes();
+  post("/api/playback/stop", undefined, "stopped");
+});

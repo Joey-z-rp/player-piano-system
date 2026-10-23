@@ -40,6 +40,9 @@ select.key-select { width: auto; min-width: 8rem; }
 .facts .table-key { color: var(--chart-written); }
 
 .own { margin: var(--space-2) 0; }
+.adjust-kind { margin-bottom: var(--space-2); }
+.set-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--warn); vertical-align: middle; margin-left: 2px; }
+.set-dot[hidden] { display: none; }
 table.points { border-collapse: collapse; margin: var(--space-2) 0; }
 table.points th { font-size: var(--text-xs); font-weight: 600; color: var(--text-2); text-align: left; padding: 0 var(--space-2) var(--space-1) 0; }
 table.points td { padding: 3px var(--space-2) 3px 0; }
@@ -47,7 +50,7 @@ table.points input { width: 6em; }
 #offsets-message:empty { display: none; }
 #offsets-message.error { color: var(--danger); }
 #offsets-message { margin-top: var(--space-2); color: var(--text-2); }
-.adjusted { margin-top: var(--space-3); padding-top: var(--space-3); border-top: 1px solid var(--border); color: var(--text-2);
+#adjusted-keys { margin-top: var(--space-3); padding-top: var(--space-3); border-top: 1px solid var(--border); color: var(--text-2);
   display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-2); align-items: center; }
 
 .test { padding: var(--space-3) 0; border-top: 1px solid var(--border); }

@@ -174,12 +174,12 @@ BOUNCE_CLAMP: dict[int, tuple | list[tuple]] = {
     37: [(34, -10, 100, 100), (39, -15, 100, 100)],
     38: [(34, -10, 100, 100), (37, -15, 100, 100)],
     39: [(36, -10, 100, 100)],
-    40: [(37, -10, 100, 100), (39, -15, 100, 100)],
+    40: [(37, -10, 100, 100), (39, -15, 100, 100), (42, -20, 100, 100)],
     41: [(39, -10, 100, 100)],
     42: [(30, -10, 100, 100)],
     44: [(33, -10, 100, 100)],
     45: [(34, -10, 100, 100), (42, -15, 100, 100)],
-    46: [(35, -15, 100, 100)],
+    46: [(34, -15, 100, 100)],
     47: [(30, -10, 100, 100)],
     48: [(37, -10, 100, 100)],
     50: [(36, -10, 100, 100)],
@@ -330,7 +330,18 @@ RECORDING_DIR = PROJECT_DIR / "calibration" / "recordings"
 # thump. table and report apply them.
 FLAGS_FILE = PROJECT_DIR / "calibration" / "flags.json"
 # check: a rough look at the table as the controller plays it.
-CHECK_VELOCITIES = [1, 16, 32, 48, 64, 80, 96, 108, 118, 127]  # closer together at the loud end
+CHECK_VELOCITIES = [
+    1,
+    16,
+    32,
+    48,
+    64,
+    80,
+    96,
+    108,
+    118,
+    127,
+]  # closer together at the loud end
 CHECK_STRIKES = 2  # per velocity
 CHECK_FLAG_DB = 3  # flag a velocity this far from the key's typical difference
 CHECK_FILE = PROJECT_DIR / "calibration" / "check.json"
@@ -404,16 +415,28 @@ def main() -> None:
     p.set_defaults(run=clipcheck)
 
     p = commands.add_parser(
-        "check", help="play the table as the controller does at a few velocities, against the levels it expects"
+        "check",
+        help="play the table as the controller does at a few velocities, against the levels it expects",
     )
     add_audio(p)
     p.add_argument("--keys", default=KEYS, help="e.g. 0-87, or 30-40,50")
-    p.add_argument("--velocities", type=lambda v: [int(x) for x in v.split(",")], default=CHECK_VELOCITIES,
-                   help="e.g. 1,32,64,127")
+    p.add_argument(
+        "--velocities",
+        type=lambda v: [int(x) for x in v.split(",")],
+        default=CHECK_VELOCITIES,
+        help="e.g. 1,32,64,127",
+    )
     p.add_argument("--strikes", type=int, default=CHECK_STRIKES, help="per velocity")
-    p.add_argument("--flag-db", type=float, default=CHECK_FLAG_DB, help="see CHECK_FLAG_DB")
+    p.add_argument(
+        "--flag-db", type=float, default=CHECK_FLAG_DB, help="see CHECK_FLAG_DB"
+    )
     p.add_argument("--table", type=Path, default=TABLE_FILE)
-    p.add_argument("--out", type=Path, default=None, help="results file (default CHECK_FILE, or CHECK_PEDAL_FILE)")
+    p.add_argument(
+        "--out",
+        type=Path,
+        default=None,
+        help="results file (default CHECK_FILE, or CHECK_PEDAL_FILE)",
+    )
     add_pedal(p, "with the sustain pedal down, playing the pedal entries")
     p.set_defaults(run=check)
 

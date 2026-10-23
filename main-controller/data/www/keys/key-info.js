@@ -1,6 +1,7 @@
-// What the velocity table does with the selected key (its duty curve, landing,
-// clamp and the command it sends), and its offsets editor. Uses the helpers
-// and settings in app.js, and ui (/assets/app.js).
+// What the velocity table does with the selected key: its duty curve (with
+// its adjustments, or the ones being edited in adjust.js), landing, clamp and
+// the command it sends. Uses the helpers and settings in app.js, adjust.js,
+// and ui (/assets/app.js).
 // ---- what the table does with the key ----
 let keyInfo = null;
 let infoRequest = 0;
@@ -24,205 +25,15 @@ function svgEl(name, attrs) {
   return el;
 }
 
-// ---- per-key offsets ----
-// As the controller does it (key_offsets.cpp OffsetCurve::adjust): straight
-// lines between the points, flat beyond them, rounded half away from zero.
-function divideRounded(n, d) {
-  const half = Math.floor(d / 2);
-  return n >= 0 ? Math.floor((n + half) / d) : -Math.floor((-n + half) / d);
-}
-function offsetAt(points, v) {
-  if (!points.length) return 0;
-  if (v <= points[0][0]) return points[0][1];
-  const last = points[points.length - 1];
-  if (v >= last[0]) return last[1];
-  let i = 1;
-  while (points[i][0] < v) i++;
-  const [v0, o0] = points[i - 1], [v1, o1] = points[i], span = v1 - v0;
-  return divideRounded(o0 * span + (o1 - o0) * (v - v0), span);
-}
-const adjust = (points, v) => Math.min(127, Math.max(1, v + offsetAt(points, v)));
-
-// What's wrong with a curve, as the controller would say it, or "".
-const MAX_POINTS = 8; // MAX_OFFSET_POINTS in key_offsets.h
-function curveProblem(points) {
-  if (points.length > MAX_POINTS) return `a curve can have up to ${MAX_POINTS} points`;
-  if (points.some(([v, o]) => !Number.isInteger(v) || v < 1 || v > 127 || !Number.isInteger(o) || o < -60 || o > 60)) {
-    return "each point needs a velocity from 1 to 127 and an offset from -60 to 60";
-  }
-  if (points.some((p, i) => i > 0 && p[0] <= points[i - 1][0])) return "the velocities must rise from point to point";
-  for (let v = 2; v <= 127; v++) {
-    if (adjust(points, v) < adjust(points, v - 1)) {
-      return `velocity ${v} would play softer than ${v - 1}: an offset can't fall by more than 1 per velocity`;
-    }
-  }
-  return "";
-}
-
-// Where the offsets run out of room: velocities pushed past 1 or 127.
-function noRoom(points) {
-  const over = [], under = [];
-  for (let v = 1; v <= 127; v++) {
-    const want = v + offsetAt(points, v);
-    if (want > 127) over.push(v);
-    if (want < 1) under.push(v);
-  }
-  const span = (list) => (list.length > 1 ? `${list[0]}-${list[list.length - 1]}` : list[0]);
-  return [over.length ? `velocities ${span(over)} already play at 127: no louder` : "",
-    under.length ? `velocities ${span(under)} already play at 1: no softer` : ""].filter(Boolean).join("; ");
-}
-
-let allOffsets = {}; // key -> {up, pedal}, from /api/offsets
-let draft = null; // the points being edited, for the curve shown
-let draftFor = ""; // which key and curve the draft is: "key/up" or "key/pedal"
-
-async function loadOffsets() {
-  try {
-    const response = await fetch("/api/offsets");
-    if (response.ok) allOffsets = (await response.json()).keys || {};
-  } catch { /* keep what we had */ }
-  showAdjustedKeys();
-}
-
-function showAdjustedKeys() {
-  keyboard.querySelectorAll(".adjusted").forEach((el) => el.classList.remove("adjusted"));
-  const keys = Object.keys(allOffsets).map(Number).sort((a, b) => a - b);
-  keys.forEach((key) => keyboard.querySelector(`[data-key="${key}"]`)?.classList.add("adjusted"));
-  const box = $("adjusted-keys");
-  if (!keys.length) {
-    box.textContent = "No key has offsets yet: keys with them get an orange dot on the keyboard.";
-    return;
-  }
-  box.replaceChildren("Keys with offsets:", ...keys.map((key) => ui.el("button", { class: "btn btn-sm", type: "button",
-    onclick: () => selectKey(key) }, noteName(key) + (allOffsets[key].pedal ? " (own pedal-down)" : ""))));
-  const clear = ui.el("button", { class: "btn btn-ghost btn-sm danger-text", type: "button" }, "Clear all");
-  clear.addEventListener("click", async () => {
-    const sure = await ui.confirm({ title: "Clear every key's offsets?", message: "Every key goes back to playing as the velocity table says.",
-      confirm: "Clear all", danger: true });
-    if (!sure) return;
-    if (await post("/api/offsets/clear", undefined, "every key's offsets cleared")) {
-      draft = null;
-      await loadOffsets();
-      loadKeyInfo();
-    }
-  });
-  box.append(clear);
-}
-
-// Which curve the editor works on: the pedal-down one with "Pedal down"
-// ticked and a key with its own pedal-down entry, else the pedal-up one.
-const editingPedal = () => settings.pedal && keyInfo && keyInfo.hasPedal;
-const savedCurve = (info) => (editingPedal() ? info.offsets.pedal : info.offsets.up);
-
-function pointRow(point) {
-  const tr = document.createElement("tr");
-  point.forEach((value, i) => {
-    const td = document.createElement("td");
-    const input = document.createElement("input");
-    input.className = "input input-sm";
-    Object.assign(input, { type: "number", value, step: 1, ...(i ? { min: -60, max: 60 } : { min: 1, max: 127 }) });
-    input.setAttribute("aria-label", i ? "offset" : "from velocity");
-    input.addEventListener("input", () => { readDraft(); drawKeyInfo(false); });
-    td.append(input);
-    tr.append(td);
-  });
-  const remove = document.createElement("button");
-  remove.type = "button";
-  remove.className = "btn btn-ghost btn-icon btn-sm";
-  remove.innerHTML = ui.icon("close");
-  remove.title = remove.ariaLabel = "Remove this point";
-  remove.addEventListener("click", () => { tr.remove(); readDraft(); drawKeyInfo(false); });
-  const td = document.createElement("td");
-  td.append(remove);
-  tr.append(td);
-  return tr;
-}
-
-function readDraft() {
-  draft = [...$("points").querySelectorAll("tr")].map((tr) =>
-    [...tr.querySelectorAll("input")].map((input) => Number(input.value)));
-}
-
-// The editor, for the key shown; rows rebuilt only when asked (not while typing).
-function drawOffsets(rebuild) {
-  const box = $("offsets");
-  box.hidden = !velocityMode() || !keyInfo;
-  if (box.hidden) return;
-  const info = keyInfo;
-  const pedalDown = editingPedal();
-  const own = pedalDown && info.offsets.pedal !== null;
-  const which = `${info.key}/${pedalDown ? "pedal" : "up"}`;
-  if (rebuild || draftFor !== which) {
-    draftFor = which;
-    draft = pedalDown && !own ? null : (savedCurve(info) || []).map((p) => p.slice());
-    $("points").replaceChildren(...(draft || []).map(pointRow));
-  }
-  $("offsets-title").textContent = `Offsets for ${noteName(info.key)}${pedalDown ? ", pedal down" : settings.pedal ? "" : ", pedal up"}`;
-  $("own-pedal-row").hidden = !pedalDown;
-  $("own-pedal").checked = own || draft !== null && pedalDown;
-  $("offsets-edit").hidden = pedalDown && draft === null;
-  $("offsets-hint").textContent = pedalDown && draft === null
-    ? "With the pedal down it uses its pedal-up offsets."
-    : settings.pedal && !info.hasPedal
-      ? "It has no pedal-down entry, so these apply with the pedal up and down."
-      : "From each point's velocity on, the key plays as if given that many velocities more (or fewer), " +
-        "on straight lines between the points.";
-  const problem = draft ? curveProblem(draft) : "";
-  const message = $("offsets-message");
-  const changed = draftFor === which && JSON.stringify(draft) !== JSON.stringify(savedCurve(info) ?? null);
-  message.className = problem ? "error" : "";
-  message.textContent = problem || (changed ? "not saved yet: the curve shows it" : "");
-  $("save-offsets").disabled = Boolean(problem) || !changed;
-  $("add-point").disabled = (draft || []).length >= MAX_POINTS;
-  $("clear-offsets").textContent = pedalDown ? "Use the pedal-up offsets" : "Remove its offsets";
-}
-
-$("add-point").addEventListener("click", () => {
-  readDraft();
-  const last = draft[draft.length - 1];
-  const point = last ? [Math.min(127, last[0] + 16), last[1]] : [settings.velocity, 0];
-  $("points").append(pointRow(point));
-  readDraft();
-  drawKeyInfo(false);
-});
-
-$("own-pedal").addEventListener("change", () => {
-  if ($("own-pedal").checked) {
-    draft = (keyInfo.offsets.up || []).map((p) => p.slice()); // starting from the pedal-up ones
-  } else {
-    draft = null;
-  }
-  $("points").replaceChildren(...(draft || []).map(pointRow));
-  drawKeyInfo(false);
-});
-
-async function saveOffsets(points) {
-  const info = keyInfo;
-  const body = { key: info.key, up: info.offsets.up, pedal: info.offsets.pedal };
-  if (editingPedal()) body.pedal = points;
-  else body.up = points || [];
-  const reply = await post("/api/offsets/key", body,
-    `${noteName(info.key)} offsets${editingPedal() ? " (pedal down)" : ""}: ` +
-    (points === null ? "same as pedal up" : points.length ? points.map(([v, o]) => `${v}: ${o > 0 ? "+" : ""}${o}`).join(", ") : "none"));
-  if (reply) {
-    allOffsets = reply.keys || {};
-    showAdjustedKeys();
-    await loadKeyInfo(true);
-  }
-}
-$("save-offsets").addEventListener("click", () => saveOffsets(draft));
-$("clear-offsets").addEventListener("click", () => saveOffsets(editingPedal() ? null : []));
-
 // Its duty at each velocity, pedal up and (if it has its own) down.
 function drawCurve(info) {
   const W = 460, H = 250, m = { left: 38, right: 8, top: 8, bottom: 22 };
-  // The layer it plays from now: the table's curve, and (with offsets, or a
-  // draft of them) what it plays.
-  const pedalLayer = info.pedal && info.tablePedalDuties;
-  const table = pedalLayer ? info.tablePedalDuties : info.tableDuties;
-  const points = draft ?? (pedalLayer || info.pedal ? info.offsets.pedal ?? info.offsets.up : info.offsets.up) ?? [];
-  const played = table.map((_, i) => table[adjust(points, i + 1) - 1]);
-  // Zoomed to the key's own duties (to the 10% around them), so an offset shows.
+  // The layer it plays from now: the table's curve, and (with adjustments,
+  // or a draft of them) what it plays.
+  const table = tableShown(info);
+  const played = playedDuties(info);
+  const adjusted = played.some((d, i) => d !== table[i]);
+  // Zoomed to the key's own duties (to the 10% around them), so a change shows.
   const low = Math.max(0, Math.floor(Math.min(...table, ...played) / 10) * 10);
   const high = Math.min(100, Math.max(low + 10, Math.ceil(Math.max(...table, ...played) / 10) * 10));
   const x = (v) => m.left + ((v - 1) / 126) * (W - m.left - m.right);
@@ -246,7 +57,7 @@ function drawCurve(info) {
     points: duties.map((d, i) => `${x(i + 1)},${y(d)}`).join(" "),
     fill: "none", stroke: colour, "stroke-width": width, ...(dash ? { "stroke-dasharray": "4 3" } : {}),
   }));
-  if (points.length) line(table, ui.token("--chart-written"), true, 1.5);
+  if (adjusted) line(table, ui.token("--chart-written"), true, 1.5);
   line(played, ui.token("--chart-played"));
   const v = info.velocity;
   svg.append(svgEl("circle", { cx: x(v), cy: y(played[v - 1]), r: 5, fill: "#f2b33d", stroke: ui.token("--chart-bg"), "stroke-width": 2 }));
@@ -270,17 +81,21 @@ function drawKeyInfo(rebuildOffsets = false) {
   lines.push(`<b>${noteName(info.key)}</b> (key ${info.key}): ` +
     (info.calibrated ? "calibrated" : `<span class="warn">not calibrated: a straight default mapping</span>`) +
     (info.hasPedal ? ", with its own pedal-down entry" : info.pedal ? ", plays the same with the pedal down" : ""));
+  const table = tableShown(info);
+  const estimated = info.dutyChange && info.duty > table[126];
   lines.push(`At velocity ${info.velocity}${info.pedal && info.hasPedal ? " (pedal down)" : ""}` +
     (info.playedVelocity !== info.velocity ? `, played as ${info.playedVelocity} (its offset)` : "") +
-    `: duty ${info.duty}%` + (info.landingMs ? `, hammer lands ${info.landingMs} ms after the press` : ""));
+    (info.dutyChange ? `, ${info.dutyChange > 0 ? "+" : ""}${info.dutyChange}% (its duty change)` : "") +
+    `: duty ${info.duty}%` + (info.landingMs ? `, hammer lands ${info.landingMs} ms after the press` +
+      (estimated ? " (estimated from its neighbours: louder than its calibration goes)" : "") : ""));
   lines.push(info.clamp
     ? `Clamp: ${info.clamp.duty}% for ${info.clamp.ms} ms from ${info.clamp.offsetMs} ms after it lands; then holds at ${info.hold}%`
     : `Coasts at ${info.coast}%, then holds at ${info.hold}%`);
-  const range = info.pedal && info.pedalDuties ? info.pedalDuties : info.duties;
-  const points = draft ?? (info.pedal && info.hasPedal ? info.offsets.pedal ?? info.offsets.up : info.offsets.up) ?? [];
-  lines.push(`Duty from ${range[0]}% (velocity 1) to ${range[126]}% (127)` +
-    (points.length ? `; <span class="played-key">as played</span>, <span class="table-key">the table (dashed)</span>` : ""));
-  const room = noRoom(points);
+  const played = playedDuties(info);
+  const adjusted = played.some((d, i) => d !== table[i]);
+  lines.push(`Duty from ${played[0]}% (velocity 1) to ${played[126]}% (127)` +
+    (adjusted ? `; <span class="played-key">as played</span>, <span class="table-key">the table (dashed)</span>` : ""));
+  const room = limits(info);
   if (room) lines.push(`<span class="room">${room}</span>`);
   lines.push(`Sends <code>${info.command}</code>`);
   facts.innerHTML = lines.join("<br>");

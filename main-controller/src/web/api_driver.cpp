@@ -90,8 +90,11 @@ void registerDriverRoutes(AsyncWebServer &server, PianoController &piano)
   // "duty", "landingMs", "coast", "hold", "clamp": {"offsetMs", "ms", "duty"}
   // or null, "duties": [duty played at velocity 1-127, offsets and all],
   // "tableDuties": [as the table has them], "pedalDuties" and
-  // "tablePedalDuties" (with a pedal-down entry), "offsets": {"up": [[velocity,
-  // offset], ...], "pedal": [...] or null}}. Duties in percent.
+  // "tablePedalDuties" (with a pedal-down entry), "landings": [landing ms at
+  // velocity 1-127 as played, for this pedal], "dutyChange" (at this
+  // velocity), "offsets": {"up": [[velocity, offset], ...], "pedal": [...] or
+  // null, "duty": [[velocity, duty change], ...], "dutyPedal": [...] or
+  // null}}. Duties in percent.
   server.on("/api/driver/key", HTTP_GET, [&piano](AsyncWebServerRequest *request) {
     long key, velocity, pedalParam;
     if (!readParam(request, "key", 0, PIANO_KEY_COUNT - 1, key) ||
@@ -120,6 +123,7 @@ void registerDriverRoutes(AsyncWebServer &server, PianoController &piano)
     doc["playedVelocity"] = table->playedVelocity(key, velocity, pedal);
     doc["duty"] = percent(duty);
     doc["landingMs"] = table->landingMs(key, velocity, pedal);
+    doc["dutyChange"] = table->dutyChange(key, velocity, pedal) / 100.0;
     doc["coast"] = percent(table->coastDuty(key, pedal));
     doc["hold"] = percent(table->holdDuty(key, duty, pedal));
     int32_t clampMs = table->setting(key, KeySetting::ClampMs, duty, pedal);
@@ -151,29 +155,46 @@ void registerDriverRoutes(AsyncWebServer &server, PianoController &piano)
         tablePedalDuties.add(percent(table->tableDuty(key, v, true)));
       }
     }
+    JsonArray landings = doc["landings"].to<JsonArray>();
+    for (uint8_t v = 1; v <= VELOCITY_LEVELS; v++)
+    {
+      landings.add(table->landingMs(key, v, pedal));
+    }
     std::shared_ptr<const KeyOffsets> offsets = table->offsets();
+    KeyOffsets::Entry entry = offsets != nullptr ? offsets->entry(key) : KeyOffsets::Entry();
     JsonObject keyOffsets = doc["offsets"].to<JsonObject>();
-    JsonArray upPoints = keyOffsets["up"].to<JsonArray>();
-    for (uint8_t i = 0; offsets != nullptr && i < offsets->up[key].count; i++)
-    {
-      JsonArray point = upPoints.add<JsonArray>();
-      point.add(offsets->up[key].points[i].velocity);
-      point.add(offsets->up[key].points[i].offset);
-    }
-    if (offsets != nullptr && offsets->hasPedal[key])
-    {
-      JsonArray pedalPoints = keyOffsets["pedal"].to<JsonArray>();
-      for (uint8_t i = 0; i < offsets->pedal[key].count; i++)
+    auto addOffsets = [&](const char *name, const OffsetCurve &curve, bool has) {
+      if (!has)
       {
-        JsonArray point = pedalPoints.add<JsonArray>();
-        point.add(offsets->pedal[key].points[i].velocity);
-        point.add(offsets->pedal[key].points[i].offset);
+        keyOffsets[name] = nullptr;
+        return;
       }
-    }
-    else
-    {
-      keyOffsets["pedal"] = nullptr;
-    }
+      JsonArray points = keyOffsets[name].to<JsonArray>();
+      for (uint8_t i = 0; i < curve.count; i++)
+      {
+        JsonArray point = points.add<JsonArray>();
+        point.add(curve.points[i].velocity);
+        point.add(curve.points[i].offset);
+      }
+    };
+    auto addDuty = [&](const char *name, const DutyCurve &curve, bool has) {
+      if (!has)
+      {
+        keyOffsets[name] = nullptr;
+        return;
+      }
+      JsonArray points = keyOffsets[name].to<JsonArray>();
+      for (uint8_t i = 0; i < curve.count; i++)
+      {
+        JsonArray point = points.add<JsonArray>();
+        point.add(curve.points[i].velocity);
+        point.add(curve.points[i].change / 100.0);
+      }
+    };
+    addOffsets("up", entry.up, true);
+    addOffsets("pedal", entry.pedal, entry.hasPedal);
+    addDuty("duty", entry.dutyUp, true);
+    addDuty("dutyPedal", entry.dutyPedal, entry.hasDutyPedal);
     sendJson(request, 200, doc);
   });
 
@@ -289,8 +310,8 @@ void registerDriverRoutes(AsyncWebServer &server, PianoController &piano)
             continue;
           }
           char command[DRIVER_COMMAND_MAX_LENGTH + 1];
-          table->pressCommand(event.key, event.velocity, command, sizeof(command), event.pedal,
-                              event.repeat ? &config.repeatClamp : nullptr);
+          table->strikeCommand(event.key, event.duty, event.landingMs, command, sizeof(command), event.pedal,
+                               event.repeat ? &config.repeatClamp : nullptr);
           JsonArray press = presses.add<JsonArray>();
           press.add(event.timeMs);
           press.add(command);

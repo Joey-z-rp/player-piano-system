@@ -1,4 +1,5 @@
 #include <unity.h>
+#include <memory>
 #include <string>
 #include "app/piano/key_offsets.h"
 #include "app/piano/velocity_table.h"
@@ -152,6 +153,143 @@ void test_the_table_plays_a_key_at_its_offset_velocity()
   TEST_ASSERT_EQUAL_UINT8(64, table.playedVelocity(0, 64));
 }
 
+static KeyOffsets::Entry entry(const std::string &json)
+{
+  KeyOffsets::Entry out;
+  std::string error;
+  TEST_ASSERT_TRUE_MESSAGE(readKeyEntry(json.data(), json.size(), out, error), error.c_str());
+  return out;
+}
+
+void test_duty_changes_join_points_in_quarter_percent_steps()
+{
+  KeyOffsets::Entry e = entry("{\"duty\":[[64,0],[127,23]]}");
+  TEST_ASSERT_EQUAL_INT16(0, e.dutyUp.change(1)); // flat before the first point
+  TEST_ASSERT_EQUAL_INT16(0, e.dutyUp.change(64));
+  TEST_ASSERT_EQUAL_INT16(1325, e.dutyUp.change(100)); // 13.14% -> 13.25%
+  TEST_ASSERT_EQUAL_INT16(2300, e.dutyUp.change(127));
+  TEST_ASSERT_EQUAL_INT16(-250, entry("{\"duty\":[[1,-2.5]]}").dutyUp.change(90)); // one point: everywhere
+  TEST_ASSERT_EQUAL_INT16(0, entry("{}").dutyUp.change(90));
+  // A curve may fall: whether the duties still rise depends on the table.
+  TEST_ASSERT_EQUAL_INT16(-400, entry("{\"duty\":[[70,0],[90,-4],[110,0]]}").dutyUp.change(90));
+}
+
+void test_bad_duty_curves_are_rejected_and_change_nothing()
+{
+  KeyOffsets::Entry e = entry("{\"duty\":[[64,5]]}");
+  std::string error;
+  for (const char *json : {"{\"duty\":[[64,0.3]]}", "{\"duty\":[[64,51]]}", "{\"duty\":[[90,1],[80,2]]}",
+                           "{\"duty\":[[0,1]]}", "{\"duty\":[[64,\"5\"]]}", "{\"duty_pedal\":[64,5]}"})
+  {
+    std::string body = json;
+    TEST_ASSERT_FALSE_MESSAGE(readKeyEntry(body.data(), body.size(), e, error), json);
+  }
+  TEST_ASSERT_EQUAL_INT16(500, e.dutyUp.change(64));
+}
+
+void test_duty_curves_are_kept_with_the_offsets()
+{
+  std::string json = "{\"keys\":{\"10\":{\"up\":[],\"duty\":[[64,0],[127,23.25]]},"
+                     "\"20\":{\"up\":[[64,-4]],\"duty_pedal\":[[1,-1.5]]}}}";
+  KeyOffsets offsets;
+  std::string error;
+  TEST_ASSERT_TRUE_MESSAGE(readKeyOffsets(json.data(), json.size(), offsets, error), error.c_str());
+  TEST_ASSERT_EQUAL_INT16(2325, offsets.dutyChange(10, 127, false));
+  TEST_ASSERT_EQUAL_INT16(2325, offsets.dutyChange(10, 127, true)); // no pedal-down curve: the pedal-up one
+  TEST_ASSERT_EQUAL_INT16(0, offsets.dutyChange(20, 90, false));
+  TEST_ASSERT_EQUAL_INT16(-150, offsets.dutyChange(20, 90, true));
+  TEST_ASSERT_FALSE(offsets.empty());
+  TEST_ASSERT_EQUAL_STRING(json.c_str(), keyOffsetsJson(offsets).c_str());
+  offsets.set(10, KeyOffsets::Entry());
+  offsets.set(20, KeyOffsets::Entry());
+  TEST_ASSERT_TRUE(offsets.empty());
+}
+
+// Keys 10-14: each one's duty rises to 100% at velocity 127 and its hammer
+// lands 200 - velocity ms after the press, except key 12's, which only goes
+// to 50% (its calibration stopped short).
+static void loadNeighbours(VelocityTable &table)
+{
+  std::string keys;
+  for (int key = 10; key <= 14; key++)
+  {
+    std::string duty = "[", landing = "[";
+    for (int v = 1; v <= 127; v++)
+    {
+      duty += (v > 1 ? "," : "") + std::to_string(v * (key == 12 ? 50 : 100) / 127.0);
+      landing += (v > 1 ? "," : "") + std::to_string(200 - v);
+    }
+    keys += (key > 10 ? ",\"" : "\"") + std::to_string(key) + "\":{\"duty\":" + duty + "],\"landing_ms\":" + landing + "]}";
+  }
+  std::string json = "{\"keys\":{" + keys + "}}";
+  std::string error;
+  TEST_ASSERT_TRUE_MESSAGE(table.load(json.data(), json.size(), error), error.c_str());
+}
+
+static void useDuty(VelocityTable &table, uint8_t key, const std::string &json)
+{
+  std::shared_ptr<KeyOffsets> offsets = std::make_shared<KeyOffsets>();
+  offsets->set(key, entry(json));
+  table.setOffsets(offsets);
+}
+
+void test_a_duty_change_adds_to_the_table_within_0_and_100()
+{
+  static VelocityTable table;
+  loadNeighbours(table);
+  useDuty(table, 12, "{\"duty\":[[64,0],[127,30]]}");
+  TEST_ASSERT_EQUAL_UINT16(table.tableDuty(12, 64), table.duty(12, 64));
+  TEST_ASSERT_EQUAL_UINT16(8000, table.duty(12, 127));
+  char command[48];
+  table.pressCommand(12, 127, command, sizeof(command));
+  TEST_ASSERT_EQUAL_STRING_LEN("P:12:80:", command, 8);
+  useDuty(table, 11, "{\"duty\":[[1,10]]}");
+  TEST_ASSERT_EQUAL_UINT16(DUTY_FULL, table.duty(11, 127));
+  useDuty(table, 11, "{\"duty\":[[1,-10]]}");
+  TEST_ASSERT_EQUAL_UINT16(0, table.duty(11, 1));
+  table.setOffsets(nullptr);
+}
+
+void test_a_duty_change_lands_as_its_duty_does()
+{
+  static VelocityTable table;
+  loadNeighbours(table);
+  // Within the key's own duties: the landing of the velocity with that duty.
+  // Velocity 64 is 25.2% + 5% = 30.2%, key 12's duty at about velocity 76.7.
+  useDuty(table, 12, "{\"duty\":[[1,5]]}");
+  TEST_ASSERT_UINT16_WITHIN(1, 123, table.landingMs(12, 64));
+  // Below its softest: its softest's.
+  useDuty(table, 12, "{\"duty\":[[1,-5]]}");
+  TEST_ASSERT_EQUAL_UINT16(199, table.landingMs(12, 1));
+  // Above its loudest (50%, landing at 73 ms): as much sooner as its
+  // neighbours land from 50% to 80%, about 38 ms.
+  useDuty(table, 12, "{\"duty\":[[64,0],[127,30]]}");
+  TEST_ASSERT_UINT16_WITHIN(1, 35, table.landingMs(12, 127));
+  TEST_ASSERT_EQUAL_UINT16(table.tableLandingMs(12, 64), table.landingMs(12, 64)); // no change: as before
+  TEST_ASSERT_EQUAL_UINT16(199, table.maxLandingMs());
+  // A key struck softer than its loudest: along its own times.
+  useDuty(table, 10, "{\"duty\":[[127,-50]]}"); // 50%: velocity 63.5 -> about 136 ms
+  TEST_ASSERT_UINT16_WITHIN(1, 136, table.landingMs(10, 127));
+  table.setOffsets(nullptr);
+}
+
+void test_a_key_louder_than_its_neighbours_go_keeps_its_loudest_landing()
+{
+  static VelocityTable table;
+  std::string duty = "[", landing = "[";
+  for (int v = 1; v <= 127; v++)
+  {
+    duty += (v > 1 ? "," : "") + std::to_string(v * 50 / 127.0);
+    landing += (v > 1 ? "," : "") + std::to_string(200 - v);
+  }
+  std::string json = "{\"keys\":{\"40\":{\"duty\":" + duty + "],\"landing_ms\":" + landing + "]}}}";
+  std::string error;
+  TEST_ASSERT_TRUE_MESSAGE(table.load(json.data(), json.size(), error), error.c_str());
+  useDuty(table, 40, "{\"duty\":[[127,30]]}");
+  TEST_ASSERT_EQUAL_UINT16(73, table.landingMs(40, 127));
+  table.setOffsets(nullptr);
+}
+
 int main()
 {
   UNITY_BEGIN();
@@ -164,5 +302,11 @@ int main()
   RUN_TEST(test_pedal_down_uses_its_own_curve_else_the_pedal_up_one);
   RUN_TEST(test_bad_key_offsets_change_nothing);
   RUN_TEST(test_the_table_plays_a_key_at_its_offset_velocity);
+  RUN_TEST(test_duty_changes_join_points_in_quarter_percent_steps);
+  RUN_TEST(test_bad_duty_curves_are_rejected_and_change_nothing);
+  RUN_TEST(test_duty_curves_are_kept_with_the_offsets);
+  RUN_TEST(test_a_duty_change_adds_to_the_table_within_0_and_100);
+  RUN_TEST(test_a_duty_change_lands_as_its_duty_does);
+  RUN_TEST(test_a_key_louder_than_its_neighbours_go_keeps_its_loudest_landing);
   return UNITY_END();
 }

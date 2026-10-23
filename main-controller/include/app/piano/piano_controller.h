@@ -194,7 +194,7 @@ public:
   // Play (playConfigVersion changes with them, so pieces are rebuilt).
   std::string keyOffsetsJson() const;
   // A key's curves: up, and its own pedal-down one (null: none, it uses up).
-  void setKeyOffsets(uint8_t key, const OffsetCurve &up, const OffsetCurve *pedal);
+  void setKeyOffsets(uint8_t key, const KeyOffsets::Entry &entry);
   void clearKeyOffsets();
   void setAllKeyOffsets(const KeyOffsets &offsets); // e.g. from a backup
 
@@ -251,7 +251,7 @@ private:
   void saveConfig(const PlayConfig &config);
   void useKeyOffsets(std::shared_ptr<const KeyOffsets> offsets); // and save them
   bool send(const char *command);
-  void sendPress(uint8_t key, uint8_t velocity, bool pedal, bool repeat);
+  void sendPress(const RollEvent &event); // as the roll worked it out
 
   Rs485Module *rs485;
   VelocityTable *velocityTable;

@@ -141,7 +141,7 @@ namespace
         if (on != sustain)
         {
           sustain = on;
-          pedal.push_back({timeMs, on ? RollEventType::SustainOn : RollEventType::SustainOff, 0, 0, false, false});
+          pedal.push_back({timeMs, on ? RollEventType::SustainOn : RollEventType::SustainOff, 0, 0, false, false, 0, 0});
         }
         break;
       }
@@ -441,8 +441,14 @@ bool buildPianoRoll(const std::vector<MidiEvent> &events, PianoRoll &roll, const
       {
         continue;
       }
-      roll.events.push_back({note.onMs, RollEventType::KeyPress, note.key, note.velocity, note.pedal, note.repeat});
-      roll.events.push_back({note.offMs, RollEventType::KeyRelease, note.key, 0, false, false});
+      // The strike itself: note.landingMs is when it sounds (a repeat's press
+      // can be moved), not when its hammer lands.
+      uint16_t duty = timing != nullptr ? timing->duty(note.key, note.velocity, note.pedal)
+                                        : VelocityTable::defaultDuty(note.velocity);
+      uint16_t landing = timing != nullptr ? timing->landingMs(note.key, note.velocity, note.pedal) : 0;
+      roll.events.push_back(
+          {note.onMs, RollEventType::KeyPress, note.key, note.velocity, note.pedal, note.repeat, duty, landing});
+      roll.events.push_back({note.offMs, RollEventType::KeyRelease, note.key, 0, false, false, 0, 0});
       roll.noteCount++;
     }
 
@@ -503,7 +509,7 @@ RollStart findRollStart(const PianoRoll &roll, uint32_t fromMs, const VelocityTa
     {
       const RollEvent &event = roll.events[i];
       if (event.type == RollEventType::KeyPress &&
-          event.timeMs + timing->landingMs(event.key, event.velocity, event.pedal) < fromMs)
+          event.timeMs + event.landingMs < fromMs)
       {
         start.skippedPresses.push_back(i);
         start.skipReleases.set(event.key);

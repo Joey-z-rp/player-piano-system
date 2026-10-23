@@ -191,7 +191,7 @@ std::string PianoController::keyOffsetsJson() const
   return offsets == nullptr ? "{\"keys\":{}}" : ::keyOffsetsJson(*offsets);
 }
 
-void PianoController::setKeyOffsets(uint8_t key, const OffsetCurve &up, const OffsetCurve *pedal)
+void PianoController::setKeyOffsets(uint8_t key, const KeyOffsets::Entry &entry)
 {
   if (key >= PIANO_KEY_COUNT)
   {
@@ -200,9 +200,7 @@ void PianoController::setKeyOffsets(uint8_t key, const OffsetCurve &up, const Of
   std::lock_guard<std::mutex> lock(offsetsMutex);
   std::shared_ptr<const KeyOffsets> now = velocityTable->offsets();
   std::shared_ptr<KeyOffsets> next = now != nullptr ? std::make_shared<KeyOffsets>(*now) : std::make_shared<KeyOffsets>();
-  next->up[key] = up;
-  next->hasPedal[key] = pedal != nullptr;
-  next->pedal[key] = pedal != nullptr ? *pedal : OffsetCurve();
+  next->set(key, entry);
   useKeyOffsets(next);
 }
 

@@ -1,7 +1,7 @@
 // The Keys page: a keyboard that fits the screen, keys played by velocity or
 // duty (held or struck), the pedal, raw commands and the log. What the table
-// does with a key and its offsets are in key-info.js; the listening tests in
-// listen.js. Shared helpers (ui) are in /assets/app.js.
+// does with a key is in key-info.js, its adjustments in adjust.js, the
+// listening tests in listen.js. Shared helpers (ui) are in /assets/app.js.
 const KEYS = 88;
 const NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
 const noteName = (key) => NAMES[(key + 21) % 12] + (Math.floor((key + 21) / 12) - 1);
@@ -72,14 +72,36 @@ async function post(url, body, label) {
 
 const send = (command) => post("/api/driver/command", { command }, command);
 
+// Lights a key while the controller plays it, by timers (stopFlashes ends them).
+const flashTimers = new Set();
+const flashing = new Set();
+function later(fn, ms) {
+  const timer = setTimeout(() => { flashTimers.delete(timer); fn(); }, ms);
+  flashTimers.add(timer);
+}
 function flash(key, ms, delay = 0) {
   const el = keyboard.querySelector(`[data-key="${key}"]`);
   if (!el) return;
-  setTimeout(() => {
+  later(() => {
     el.classList.add("playing");
-    setTimeout(() => el.classList.remove("playing"), ms);
+    flashing.add(el);
+    later(() => { el.classList.remove("playing"); flashing.delete(el); }, ms);
   }, delay);
 }
+// When what's playing stops early (Stop, Release all, the heat limit...).
+function stopFlashes() {
+  flashTimers.forEach(clearTimeout);
+  flashTimers.clear();
+  flashing.forEach((el) => { if (!held.has(Number(el.dataset.key))) el.classList.remove("playing"); });
+  flashing.clear();
+}
+// The controller's word for it: a test that was playing has ended.
+let testPlaying = false;
+ui.onStatus((status) => {
+  const testing = status.playback?.state === "testing";
+  if (testPlaying && !testing) stopFlashes();
+  testPlaying = testing;
+});
 
 const velocityMode = () => settings.mode === "velocity";
 const pressStyle = () => settings.style === "press";
@@ -127,6 +149,7 @@ const hold = () => Number(holdInput.value) || 300;
 // Plays [[key, velocity, on ms, off ms], ...] the way a piece plays them.
 async function playNotes(notes, label) {
   letPedalUp(); // a test ends with the pedal up
+  stopFlashes(); // a new test replaces one playing
   const reply = await post("/api/test/play", { notes, pedal: settings.pedal },
     `${label}${settings.pedal ? ", pedal down" : ""}`);
   if (!reply) return null;
@@ -326,6 +349,7 @@ $("pedal-press").addEventListener("click", () => { pedalHeld = true; pedal({ dow
 $("pedal-release").addEventListener("click", () => { letPedalUp(); pedal({ down: false }, "pedal released"); });
 $("release-all").addEventListener("click", () => {
   letPedalUp();
+  stopFlashes();
   post("/api/playback/stop", undefined, "all keys and the pedal released");
 });
 $("reset").addEventListener("click", () => post("/api/driver/reset", undefined, "drivers restarting"));

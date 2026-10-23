@@ -465,9 +465,10 @@ class Connection:
         raise NotImplementedError
 
     def offsets(self) -> dict:
-        """The controller's per-key velocity offsets (include/app/piano/
-        key_offsets.h), set on the test page: {"44": {"up": [[velocity,
-        offset], ...], "pedal": [...]}, ...}. See with_offsets."""
+        """The controller's per-key velocity offsets and duty changes
+        (include/app/piano/key_offsets.h), set on the Keys page: {"44":
+        {"up": [[velocity, offset], ...], "pedal": [...], "duty": [[velocity,
+        duty change %], ...], "duty_pedal": [...]}, ...}. See with_offsets."""
         if not hasattr(self, "_offsets"):
             self._offsets = self._read_offsets()
         return self._offsets
@@ -839,46 +840,132 @@ def adjusted_velocity(points: list, velocity: int) -> int:
     return min(127, max(1, velocity + offset))
 
 
+DUTY_CHANGE_STEP = 0.25  # key_offsets.h: the drivers' PWM steps
+LANDING_NEIGHBOURS = 4  # velocity_table.h
+
+
+def duty_change(points: list, velocity: int) -> float:
+    """A key's duty change at `velocity`, in percent (DutyCurve::change in
+    src/app/piano/key_offsets.cpp): straight lines between the [velocity,
+    change] points, flat beyond them, rounded to 0.25% half away from zero."""
+    if not points:
+        return 0.0
+    if velocity <= points[0][0]:
+        return points[0][1]
+    if velocity >= points[-1][0]:
+        return points[-1][1]
+    i = next(i for i, p in enumerate(points) if p[0] >= velocity)
+    (v0, c0), (v1, c1) = points[i - 1], points[i]
+    span = v1 - v0
+    n = round(c0 * 100) * span + (round(c1 * 100) - round(c0 * 100)) * (velocity - v0)
+    d = span * 25
+    steps = (n + d // 2) // d if n >= 0 else -((-n + d // 2) // d)
+    return steps * DUTY_CHANGE_STEP
+
+
+def _landing_along(duties: list, landings: list, duty: float) -> float:
+    """VelocityTable::landingAlong: the landing at the first velocity whose
+    duty reaches `duty`, interpolated from the one below."""
+    v = next((i for i, d in enumerate(duties) if d >= duty), len(duties) - 1)
+    if v == 0 or duties[v] <= duty:
+        return landings[v]
+    d0, d1, l0, l1 = duties[v - 1], duties[v], landings[v - 1], landings[v]
+    return round(l0 + (l1 - l0) * (duty - d0) / (d1 - d0))
+
+
+def landing_at_duty(table: dict, key: int, duty: float, pedal: bool = False) -> float:
+    """VelocityTable::landingAtDuty: the key's landing when struck at `duty`
+    (percent), along its own duties and landing times; louder than its
+    loudest, made sooner by the median of how much sooner its neighbours
+    land from its loudest duty to this one."""
+    def layer(k):
+        entry = table["keys"].get(str(k))
+        if entry is None:
+            return None
+        if pedal and "pedal" in entry:
+            entry = entry["pedal"]
+        return entry
+
+    own = layer(key)
+    landings = own.get("landing_ms") or (None if pedal and "pedal" in table["keys"][str(key)] else table.get("landing_ms"))
+    if not landings:
+        return 0
+    duties = own["duty"]
+    top, top_landing = duties[-1], landings[-1]
+    if duty <= top:
+        return _landing_along(duties, landings, duty)
+    sooner = []
+    for n in range(key - LANDING_NEIGHBOURS, key + LANDING_NEIGHBOURS + 1):
+        other = layer(n) if n != key else None
+        if other is None or not other.get("landing_ms") or other["duty"][-1] <= top:
+            continue
+        reach = other["duty"][-1]
+        sooner.append(_landing_along(other["duty"], other["landing_ms"], top)
+                      - _landing_along(other["duty"], other["landing_ms"], min(duty, reach)))
+    if not sooner:
+        return top_landing
+    sooner.sort()
+    c = len(sooner)
+    median = sooner[c // 2] if c % 2 else int((sooner[c // 2 - 1] + sooner[c // 2]) / 2)
+    return max(1, top_landing - max(0, median))
+
+
 def with_offsets(table: dict, offsets: dict) -> dict:
     """The velocity table (its JSON) as the controller plays it with these
-    per-key offsets (Connection.offsets): each adjusted key's duties and
-    landing times at each velocity are the table's at the velocity it plays,
-    with the pedal up and, for a key with a "pedal" entry, down (from its own
-    pedal-down curve if it has one, else the pedal-up one)."""
+    per-key offsets and duty changes (Connection.offsets): each adjusted
+    key's duties and landing times at each velocity are the table's at the
+    velocity it plays, plus its duty change, with the landing for that duty
+    (landing_at_duty); with the pedal up and, for a key with a "pedal"
+    entry, down (from its own pedal-down curves if it has them, else the
+    pedal-up ones)."""
     if not offsets:
         return table
+    original = table
     table = copy.deepcopy(table)
     shared = table.get("landing_ms")
 
-    def remap(entry: dict, points: list, landing_fallback) -> None:
+    def remap(entry: dict, key: int, points: list, duty_points: list, landing_fallback, pedal: bool) -> None:
         played = [adjusted_velocity(points, v) for v in range(1, 128)]
-        entry["duty"] = [entry["duty"][p - 1] for p in played]
+        duties = [entry["duty"][p - 1] for p in played]
         landing = entry.get("landing_ms") or landing_fallback
+        changes = [duty_change(duty_points, v) for v in range(1, 128)]
+        entry["duty"] = [min(100.0, max(0.0, d + c)) for d, c in zip(duties, changes)]
         if landing:
-            entry["landing_ms"] = [landing[p - 1] for p in played]
+            entry["landing_ms"] = [landing[p - 1] if c == 0 else landing_at_duty(original, key, d, pedal)
+                                   for p, c, d in zip(played, changes, entry["duty"])]
 
     for key, curves in offsets.items():
         entry = table["keys"].get(str(key))
         if entry is None:
             continue  # not calibrated: the tools leave such keys alone
-        if curves.get("up"):
-            remap(entry, curves["up"], shared)
-        pedal_points = curves["pedal"] if curves.get("pedal") is not None else curves.get("up")
-        if "pedal" in entry and pedal_points:
-            remap(entry["pedal"], pedal_points, None)
+        up, duty = curves.get("up") or [], curves.get("duty") or []
+        if up or duty:
+            remap(entry, int(key), up, duty, shared, False)
+        pedal_points = curves["pedal"] if curves.get("pedal") is not None else up
+        pedal_duty = curves["duty_pedal"] if curves.get("duty_pedal") is not None else duty
+        if "pedal" in entry and (pedal_points or pedal_duty):
+            remap(entry["pedal"], int(key), pedal_points, pedal_duty, None, True)
     return table
 
 
 def describe_offsets(offsets: dict) -> str:
-    """e.g. "keys 44 (up 64: -4), 50 (up 40: 0, 64: -6; pedal down 64: -2)"."""
+    """e.g. "keys 44 (up 64: -4), 50 (up 40: 0, 64: -6; pedal down 64: -2),
+    62 (up none; duty 64: +0%, 127: +23%)"."""
     def curve(points):
         return ", ".join(f"{v}: {o:+d}" for v, o in points) or "none"
+
+    def duty_curve(points):
+        return ", ".join(f"{v}: {c:+g}%" for v, c in points) or "none"
     parts = []
     for key in sorted(offsets, key=int):
         c = offsets[key]
         text = f"up {curve(c.get('up') or [])}"
         if c.get("pedal") is not None:
             text += f"; pedal down {curve(c['pedal'])}"
+        if c.get("duty"):
+            text += f"; duty {duty_curve(c['duty'])}"
+        if c.get("duty_pedal") is not None:
+            text += f"; duty pedal down {duty_curve(c['duty_pedal'])}"
         parts.append(f"{key} ({text})")
     return "keys " + ", ".join(parts)
 

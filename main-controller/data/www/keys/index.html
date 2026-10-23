@@ -94,12 +94,16 @@
     <div class="keys-col">
       <!-- Its offsets -->
       <section class="card" id="offsets" hidden>
-        <div class="card-head"><h2 id="offsets-title">Offsets</h2></div>
+        <div class="card-head"><h2 id="offsets-title">Adjust</h2></div>
+        <div class="segmented adjust-kind" role="radiogroup" aria-label="Adjust by">
+          <label><input type="radio" name="adjust-kind" value="velocity"><span>Velocity offset <i class="set-dot" data-set="velocity" hidden></i></span></label>
+          <label><input type="radio" name="adjust-kind" value="duty"><span>Duty change <i class="set-dot" data-set="duty" hidden></i></span></label>
+        </div>
         <p class="small muted" id="offsets-hint"></p>
-        <label class="switch small own" id="own-pedal-row"><input type="checkbox" id="own-pedal"> Its own offsets with the pedal down</label>
+        <label class="switch small own" id="own-pedal-row"><input type="checkbox" id="own-pedal"> <span id="own-pedal-label">Its own offsets with the pedal down</span></label>
         <div id="offsets-edit">
           <table class="points">
-            <thead><tr><th>From velocity</th><th>Offset</th><th></th></tr></thead>
+            <thead><tr><th>From velocity</th><th id="point-value">Offset</th><th></th></tr></thead>
             <tbody id="points"></tbody>
           </table>
           <div class="row">
@@ -179,6 +183,7 @@
 <script src="/assets/app.js"></script>
 <script src="/keys/app.js"></script>
 <script src="/keys/key-info.js"></script>
+<script src="/keys/adjust.js"></script>
 <script src="/keys/listen.js"></script>
 <script src="/keys/heat.js"></script>
 </body>

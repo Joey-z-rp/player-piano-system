@@ -26,6 +26,12 @@ struct RollEvent
   uint8_t velocity; // 1-127, KeyPress only
   bool pedal : 1;   // KeyPress only: the sustain pedal is down, so it plays as calibrated with it down
   bool repeat : 1;  // KeyPress only: struck again soon after the last on its key, so clamped as a repeat
+  // KeyPress only, worked out when the roll is built so playing only formats
+  // the command (VelocityTable::strikeCommand): the duty to strike with, in
+  // hundredths of a percent, and ms from the press until the hammer lands
+  // (0 if unknown), the key's adjustments and all.
+  uint16_t duty;
+  uint16_t landingMs;
 };
 
 // How a piece's velocities are shaped before it's played, in this order:

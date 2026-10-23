@@ -150,7 +150,7 @@ $("restore-button").addEventListener("click", async () => {
     await step("Config", () => postJson("/api/config", s.config));
   }
   if ($("restore-offsets").checked) {
-    await step("Key offsets", () => postJson("/api/offsets", { keys: s.offsets?.keys || {} }));
+    await step("Key adjustments", () => postJson("/api/offsets", { keys: s.offsets?.keys || {} }));
   }
   if ($("restore-library").checked) {
     const pieces = (s.library || []).filter((p) => backup.files[pieceFile(p)]);
