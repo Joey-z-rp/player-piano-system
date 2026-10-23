@@ -1,4 +1,5 @@
 #include "app/piano/piano_controller.h"
+#include "app/piano/note_edits.h"
 #include "app/piano/roll_builder.h"
 #include "app/piano/velocity_table.h"
 #include "rs485.h"
@@ -52,6 +53,7 @@ PlaybackResult PianoController::loadRoll(std::shared_ptr<const PianoRoll> roll)
     return PlaybackResult::Busy;
   }
   loadedRoll = roll;
+  currentEdits = roll != nullptr ? roll->edits : nullptr;
   for (std::atomic<int8_t> &offset : partOffsets)
   {
     offset = 0; // a new piece starts with its parts as written
@@ -65,6 +67,18 @@ PlaybackResult PianoController::loadRoll(std::shared_ptr<const PianoRoll> roll)
   speedPercent = 100;
   mutedParts = 0;
   return PlaybackResult::Ok;
+}
+
+std::shared_ptr<const NoteEdits> PianoController::noteEdits() const
+{
+  std::lock_guard<std::mutex> lock(rollMutex);
+  return currentEdits;
+}
+
+void PianoController::setNoteEdits(std::shared_ptr<const NoteEdits> edits)
+{
+  std::lock_guard<std::mutex> lock(rollMutex);
+  currentEdits = edits != nullptr && edits->empty() ? nullptr : edits;
 }
 
 PlaybackResult PianoController::play(uint32_t fromMs, uint16_t atSpeed)
@@ -406,14 +420,16 @@ void PianoController::rebuildIfSpeedChanged()
 void PianoController::rebuildForDynamics(uint32_t *positionMs)
 {
   std::shared_ptr<const PianoRoll> loaded;
+  std::shared_ptr<const NoteEdits> edits;
   {
     std::lock_guard<std::mutex> lock(rollMutex);
     loaded = loadedRoll;
+    edits = currentEdits;
   }
   Dynamics now = dynamics();
   uint32_t version = configVersion;
   if (loaded == nullptr || loaded->source == nullptr ||
-      (loaded->dynamics == now && loaded->configVersion == version))
+      (loaded->dynamics == now && loaded->configVersion == version && loaded->edits == edits))
   {
     return;
   }
@@ -421,7 +437,7 @@ void PianoController::rebuildForDynamics(uint32_t *positionMs)
   std::shared_ptr<PianoRoll> rebuilt = std::make_shared<PianoRoll>();
   rebuilt->configVersion = version;
   rebuilding = true;
-  bool built = buildPianoRoll(*loaded->source, *rebuilt, velocityTable, now, nullptr, &rules);
+  bool built = buildPianoRoll(*loaded->source, *rebuilt, velocityTable, now, nullptr, &rules, edits.get());
   rebuilding = false;
   if (!built)
   {
@@ -433,6 +449,7 @@ void PianoController::rebuildForDynamics(uint32_t *positionMs)
   rebuilt->libraryId = loaded->libraryId;
   rebuilt->source = loaded->source;
   rebuilt->partNames = loaded->partNames;
+  rebuilt->edits = edits;
   {
     std::lock_guard<std::mutex> lock(rollMutex);
     if (loadedRoll != loaded) // replaced by an upload meanwhile

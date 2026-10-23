@@ -64,6 +64,8 @@ struct Dynamics
   }
 };
 
+struct NoteEdits;
+
 struct PianoRoll
 {
   std::string title;
@@ -81,6 +83,7 @@ struct PianoRoll
   // The MIDI it was built from, to build it again with other dynamics, and its parts' names.
   std::shared_ptr<const std::vector<MidiEvent>> source;
   std::vector<std::string> partNames;
+  std::shared_ptr<const NoteEdits> edits; // the note edits it was built with (null: none)
 };
 
 #endif // PIANO_ROLL_H

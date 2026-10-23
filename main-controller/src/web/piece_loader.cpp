@@ -28,7 +28,8 @@ void describePiece(const std::vector<MidiEvent> &events, PieceInfo &piece)
 }
 
 bool loadPiece(PianoController &piano, const uint8_t *data, size_t length, const std::string &title,
-               const PieceInfo *saved, std::shared_ptr<PianoRoll> &roll, int &status, std::string &error)
+               const PieceInfo *saved, std::shared_ptr<const NoteEdits> edits, std::shared_ptr<PianoRoll> &roll,
+               int &status, std::string &error)
 {
   if (piano.status().state != PlaybackState::Idle)
   {
@@ -68,7 +69,8 @@ bool loadPiece(PianoController &piano, const uint8_t *data, size_t length, const
   }
   PlayConfig rules = piano.playConfig();
   roll->configVersion = piano.playConfigVersion();
-  if (!buildPianoRoll(events, *roll, piano.velocities(), dynamics, nullptr, &rules))
+  roll->edits = edits;
+  if (!buildPianoRoll(events, *roll, piano.velocities(), dynamics, nullptr, &rules, edits.get()))
   {
     status = 500;
     error = "out of memory";

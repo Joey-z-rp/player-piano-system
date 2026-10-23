@@ -2,10 +2,10 @@
 // time runs left to right, keys go up. Notes the roll builder changed stand
 // out, and stepping through them shows what happened to each. The view follows
 // the playhead while playing; when stopped it can be dragged, and a click
-// picks a point to play from.
+// picks a point to play from (or, editing notes, picks a note: note-edit.js).
 const noteView = (() => {
   const MERGED = 1, ABSORBED = 2, SHORTENED = 4, LENGTHENED = 8, LIMITED = 16, DUPLICATE = 32, BOOSTED = 64,
-    MUTED = 128;
+    MUTED = 128, EDITED = 256;
   // The kinds of change to step through: each a test of a note. A note
   // merged at the same moment as the strike it's in is doubled (two voices on
   // one key at different velocities), not a repeat too soon to strike again.
@@ -18,7 +18,8 @@ const noteView = (() => {
     { id: "limited", label: "velocity limited", test: (n) => n.changes & LIMITED },
     { id: "duplicates", label: "duplicates", test: (n) => n.changes & DUPLICATE },
     { id: "boosted", label: "repeats boosted", test: (n) => n.changes & BOOSTED },
-    { id: "muted", label: "muted", test: (n) => n.changes & MUTED }
+    { id: "muted", label: "muted", test: (n) => n.changes & MUTED },
+    { id: "edited", label: "edited by hand", test: (n) => n.changes & EDITED }
   ];
   const kindTest = () => (KINDS.find((k) => k.id === kindSelect.value) || KINDS[0]).test;
   // Velocity 1 to 127, light to dark, for played notes and changed ones.
@@ -46,6 +47,7 @@ const noteView = (() => {
       background: t("--chart-bg"), blackRow: t("--chart-row"), line: t("--chart-line"), text: t("--chart-text"),
       written: t("--chart-written"), played: t("--chart-played"), changed: t("--chart-changed"),
       merged: t("--chart-merged"), muted: t("--chart-muted"), playhead: t("--chart-playhead"),
+      edited: t("--accent"),
     };
   }
   readColors();
@@ -73,6 +75,7 @@ const noteView = (() => {
   let lowKey = 0, highKey = 87;
   let span = 10000;      // ms across the view
   let viewStart = 0;     // ms on the playback timeline at the left edge
+  let pieceEnd = 0;      // ms on the playback timeline when the last note or pedal ends
   let playing = false;
   // The playhead runs on the page's own clock, nudged toward each status
   // poll, so poll delays don't make it jump.
@@ -81,7 +84,11 @@ const noteView = (() => {
   let selected = null;   // the note stepped to
   let hovered = null;
   let pickHandler = () => {};
-  let loadedHandler = () => {};
+  let noteHandler = null; // editing: called with the note or pedal press clicked (or null)
+  let describeEdit = () => ""; // a note's hand edit, in words (note-edit.js)
+  let pedalEdited = () => false; // whether a pedal press (by its MIDI time) is edited
+  let selectedPedal = null; // the pedal press being edited: {pedal: true, down, up, source}
+  const loadedHandlers = [];
   let loadingHandler = () => {};
   let loads = 0; // the latest load(): an earlier one that finishes after it is dropped
   // With more than one part (track), each note's outline shows which it's from.
@@ -130,6 +137,11 @@ const noteView = (() => {
     const now = currentPosition();
     if (playing) {
       viewStart = now - span * 0.25;
+    } else {
+      // Dragged, scrolled or zoomed: no further than a quarter of the view
+      // before the start, or beyond the end at three quarters across.
+      const first = -span * 0.25;
+      viewStart = Math.max(first, Math.min(viewStart, Math.max(first, pieceEnd - span * 0.75)));
     }
     const shift = lead(); // notes are drawn where they sound: lead after the MIDI
     const keysHeight = l.rows * l.rowHeight;
@@ -191,6 +203,11 @@ const noteView = (() => {
       ctx.strokeStyle = partCount > 1 ? partColor(note.part) : COLORS.written;
       ctx.lineWidth = partCount > 1 ? 1.5 : 1;
       ctx.strokeRect(x + 0.5, y + 0.5, Math.max(xOf(note.writtenOff + shift, l) - x - 1, 1), l.rowHeight - 1);
+      if (note.changes & EDITED) {
+        // Edited by hand: a mark where it's played from.
+        ctx.fillStyle = COLORS.edited;
+        ctx.fillRect(playedX - 1, y - 1, 3, l.rowHeight + 2);
+      }
     }
     if (selected) {
       const y = yOf(selected.key, l);
@@ -222,6 +239,17 @@ const noteView = (() => {
     };
     band(data.writtenPedal, 0, false);
     band(data.playedPedal, 1, true);
+    // Pedal presses edited by hand, and the one being edited.
+    for (const [down, up, source] of data.writtenPedal) {
+      const isSelected = selectedPedal && selectedPedal.source === source;
+      if (!isSelected && !pedalEdited(source)) continue;
+      const x1 = xOf(down + shift, l), x2 = xOf(up + shift, l);
+      if (x2 < GUTTER || x1 > l.width) continue;
+      ctx.strokeStyle = isSelected ? COLORS.playhead : COLORS.edited;
+      ctx.lineWidth = isSelected ? 2 : 1.5;
+      ctx.strokeRect(x1 - (isSelected ? 2 : 0), pedalTop - (isSelected ? 1 : 0), Math.max(x2 - x1, 2) + (isSelected ? 4 : 0),
+        2 * PEDAL_ROW + (isSelected ? 2 : 0));
+    }
 
     // Seconds along the bottom.
     const axisY = pedalTop + 2 * PEDAL_ROW + 3;
@@ -281,6 +309,8 @@ const noteView = (() => {
     if (note.changes & MUTED) {
       lines.push("Muted: its track is left out, as if the file didn't have it.");
     }
+    const edit = describeEdit(note);
+    if (edit) lines.push(`Edited by hand: ${edit}.`);
     if (note.changes & BOOSTED) {
       lines.push(`Repeat played louder (the Repeats setting), at velocity ${note.playedVelocity}, so the key can ` +
         "strike again this soon.");
@@ -323,13 +353,30 @@ const noteView = (() => {
     return found;
   }
 
+  // The pedal press (as written) at a point in the pedal rows, or null: in
+  // the played row, the written press nearest the one played there.
+  function pedalAt(x, y) {
+    const l = layout();
+    const top = l.rows * l.rowHeight + 3;
+    if (!data || x < GUTTER || y < top || y > top + 2 * PEDAL_ROW) return null;
+    const t = timeOf(x, l) - lead();
+    const slack = (3 / l.plot) * span;
+    const toPress = ([down, up, source]) => ({ pedal: true, down, up, source });
+    const written = data.writtenPedal.find(([down, up]) => t >= down - slack && t <= up + slack);
+    if (written || y < top + PEDAL_ROW) return written ? toPress(written) : null;
+    const played = data.playedPedal.find(([down, up]) => t >= down - slack && t <= up + slack);
+    if (!played || !data.writtenPedal.length) return null;
+    const nearest = data.writtenPedal.reduce((best, s) => (Math.abs(s[0] - played[0]) < Math.abs(best[0] - played[0]) ? s : best));
+    return toPress(nearest);
+  }
+
   // ---- stepping through changes ----
   function kindNotes() {
     return notes.filter(kindTest());
   }
 
   function showSelected() {
-    if (!selected) {
+    if (!selected || noteHandler) { // editing: the editor says what it is
       changeText.textContent = "";
       return;
     }
@@ -354,6 +401,7 @@ const noteView = (() => {
     if (!playing) {
       viewStart = selected.on + lead() - span * 0.4;
     }
+    if (noteHandler) noteHandler(selected); // editing: on to that note
     showSelected();
     redraw();
   }
@@ -438,8 +486,13 @@ const noteView = (() => {
     lift(event);
     if (drag && !drag.moved) {
       const rect = canvas.getBoundingClientRect();
-      const t = timeOf(event.clientX - rect.left, layout());
-      if (event.clientX - rect.left >= GUTTER) pickHandler(Math.max(0, Math.round(t)));
+      const x = event.clientX - rect.left;
+      if (noteHandler) {
+        const y = event.clientY - rect.top;
+        noteHandler(noteAt(x, y) || pedalAt(x, y));
+      } else if (x >= GUTTER) {
+        pickHandler(Math.max(0, Math.round(timeOf(x, layout()))));
+      }
     }
     drag = null;
   });
@@ -502,22 +555,24 @@ const noteView = (() => {
       }
       section.hidden = !data;
       if (!data) {
-        loadedHandler(null);
+        loadedHandlers.forEach((handler) => handler(null));
         return;
       }
       notes = data.notes.map(([key, on, writtenOff, playedOn, playedOff, writtenVelocity, playedVelocity, changes,
-        mergedInto, part]) => ({ key, on, writtenOff, playedOn, playedOff, writtenVelocity, playedVelocity, changes,
-        mergedInto, part: part || 0 }));
-      loadedHandler(notes);
+        mergedInto, part, source]) => ({ key, on, writtenOff, playedOn, playedOff, writtenVelocity, playedVelocity,
+        changes, mergedInto, part: part || 0, source: source ?? on }));
+      pieceEnd = data.leadMs + Math.max(0, ...notes.map((n) => Math.max(n.writtenOff, n.playedOff)),
+        ...data.writtenPedal.map((s) => s[1]), ...data.playedPedal.map((s) => s[1]));
       const keys = notes.map((n) => n.key);
       lowKey = Math.max(0, Math.min(...keys) - 1);
       highKey = Math.min(87, Math.max(...keys) + 1);
       const wasSelected = selected;
       selected = wasSelected ? notes.find((n) => n.key === wasSelected.key && n.on === wasSelected.on) || null : null;
-      if (selected && !kindTest()(selected)) selected = null;
+      if (selected && !noteHandler && !kindTest()(selected)) selected = null;
       fillKinds();
       showSelected();
       redraw();
+      loadedHandlers.forEach((handler) => handler(notes));
     },
     // From each status poll: the playback state, and the position on the
     // playback timeline at sampledAt (performance.now(), half way through the
@@ -549,8 +604,40 @@ const noteView = (() => {
       loadingHandler = handler;
     },
     onLoaded(handler) {
-      loadedHandler = handler;
+      loadedHandlers.push(handler);
     },
+    // Editing notes: clicks pick a note (handler(note), or null for none)
+    // instead of where to play from; null goes back to that.
+    onNoteClick(handler) {
+      noteHandler = handler;
+      canvas.classList.toggle("editing", Boolean(handler));
+    },
+    // Marks a note (null: none), as stepping through changes does.
+    select(target) {
+      selected = target && !target.pedal ? target : null;
+      selectedPedal = target && target.pedal ? target : null;
+      showSelected();
+      redraw();
+    },
+    // The pedal press now loaded that goes down at this MIDI time, or null.
+    findPedal(source) {
+      const span = data && data.writtenPedal.find((s) => s[2] === source);
+      return span ? { pedal: true, down: span[0], up: span[1], source } : null;
+    },
+    pedalEditedWith(fn) {
+      pedalEdited = fn;
+      redraw();
+    },
+    // The note now loaded for a key and MIDI time, or null.
+    findNote(key, source) {
+      return notes.find((n) => n.key === key && n.source === source && !(n.changes & DUPLICATE)) || null;
+    },
+    describeEditWith(fn) {
+      describeEdit = fn;
+    },
+    keyName,
+    // A note's time as the view shows it (on the playback timeline).
+    timeText: (ms) => formatTime(ms + lead()),
     // How many parts the piece has: with more than one, notes show which they're from.
     setPartCount(count) {
       partCount = count;

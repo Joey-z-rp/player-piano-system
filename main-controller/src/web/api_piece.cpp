@@ -54,9 +54,9 @@ private:
       }
       {
         const NoteReport &note = report->notes[index];
-        snprintf(text, sizeof(text), "%s[%u,%u,%u,%u,%u,%u,%u,%u,%u,%u]", index ? "," : "", note.key, note.onMs,
+        snprintf(text, sizeof(text), "%s[%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u]", index ? "," : "", note.key, note.onMs,
                  note.writtenOffMs, note.playedOnMs, note.playedOffMs, note.writtenVelocity, note.playedVelocity,
-                 note.changes, note.mergedIntoMs, note.part);
+                 note.changes, note.mergedIntoMs, note.part, (unsigned)note.sourceMs);
         index++;
       }
       break;
@@ -71,7 +71,15 @@ private:
         index = 0;
         break;
       }
-      snprintf(text, sizeof(text), "%s[%u,%u]", index ? "," : "", spans[index].downMs, spans[index].upMs);
+      if (stage == 2)
+      {
+        snprintf(text, sizeof(text), "%s[%u,%u,%u]", index ? "," : "", spans[index].downMs, spans[index].upMs,
+                 (unsigned)spans[index].sourceMs);
+      }
+      else
+      {
+        snprintf(text, sizeof(text), "%s[%u,%u]", index ? "," : "", spans[index].downMs, spans[index].upMs);
+      }
       index++;
       break;
     }
@@ -98,8 +106,10 @@ void registerPieceRoutes(AsyncWebServer &server, PianoController &piano)
   // show what the roll builder changed: {"leadMs", "volume", "notes": [[key
   // 0-87, on ms, written off ms, played on ms, played off ms (both 0 if
   // merged), written velocity, played velocity (0 if merged), NoteChange
-  // flags, merged: on ms of the strike it's held in, part], ...], "writtenPedal":
-  // [[down ms, up ms], ...], "playedPedal": [...]}. Times are on the MIDI's timeline; the playback
+  // flags, merged: on ms of the strike it's held in, part, its note-on in
+  // the MIDI at its own tempo (what a note edit names)], ...], "writtenPedal":
+  // [[down ms, up ms, down in the MIDI at its own tempo (what a pedal edit
+  // names)], ...], "playedPedal": [[down ms, up ms], ...]}. Times are on the MIDI's timeline; the playback
   // position is lead ms later. Registered before /api/piece, which would
   // also match it.
   server.on("/api/piece/notes", HTTP_GET, [&piano](AsyncWebServerRequest *request) {
@@ -114,9 +124,11 @@ void registerPieceRoutes(AsyncWebServer &server, PianoController &piano)
     std::shared_ptr<RollReport> report = std::make_shared<RollReport>();
     // While playing, the dynamics it's playing with; new ones apply from the
     // next Play (or going on from a pause).
-    Dynamics dynamics = playback.state == PlaybackState::Playing ? loaded->dynamics : piano.dynamics();
+    bool playing = playback.state == PlaybackState::Playing;
+    Dynamics dynamics = playing ? loaded->dynamics : piano.dynamics();
+    std::shared_ptr<const NoteEdits> edits = playing ? loaded->edits : piano.noteEdits();
     PlayConfig rules = piano.playConfig();
-    if (!buildPianoRoll(*loaded->source, roll, piano.velocities(), dynamics, report.get(), &rules))
+    if (!buildPianoRoll(*loaded->source, roll, piano.velocities(), dynamics, report.get(), &rules, edits.get()))
     {
       sendError(request, 500, "out of memory");
       return;

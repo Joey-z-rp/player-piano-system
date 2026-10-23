@@ -5,6 +5,7 @@
 static const char INDEX_PATH[] = "/index.json";
 static const char INDEX_TEMP_PATH[] = "/index.tmp";
 static const char PIECES_DIR[] = "/pieces";
+static const char EDITS_DIR[] = "/edits";
 static const size_t FREE_MARGIN = 32 * 1024; // left free for the index and the file system's own use
 
 uint32_t unixTimeNow()
@@ -27,6 +28,7 @@ bool PieceLibrary::begin()
     return false;
   }
   fs.mkdir(PIECES_DIR);
+  fs.mkdir(EDITS_DIR);
   File file = fs.open(INDEX_PATH, "r");
   if (file)
   {
@@ -73,6 +75,20 @@ void PieceLibrary::removeStrays()
     file.close();
   }
   dir.close();
+  // Edits of pieces no longer there.
+  File edits = fs.open(EDITS_DIR);
+  for (File file = edits.openNextFile(); file; file = edits.openNextFile())
+  {
+    std::string name = file.name();
+    std::string id = name.size() == 21 && name.substr(16) == ".json" ? name.substr(0, 16) : "";
+    if (id.empty() || entry(id) == nullptr)
+    {
+      remove.push_back(std::string(EDITS_DIR) + "/" + name);
+      strayBytes += file.size();
+    }
+    file.close();
+  }
+  edits.close();
   for (const std::string &stray : remove)
   {
     fs.remove(stray.c_str());
@@ -82,7 +98,7 @@ void PieceLibrary::removeStrays()
   for (File file = root.openNextFile(); file; file = root.openNextFile())
   {
     std::string name = file.name();
-    if (name != "pieces" && name != "index.json")
+    if (name != "pieces" && name != "edits" && name != "index.json")
     {
       Serial.printf("Piece library: unexpected %s \"%s\" (%u bytes)\n", file.isDirectory() ? "folder" : "file",
                     name.c_str(), (unsigned)file.size());
@@ -93,7 +109,7 @@ void PieceLibrary::removeStrays()
   root.close();
   if (strays > 0)
   {
-    Serial.printf("Piece library: deleted %u piece files the index didn't list (%u KB)\n", (unsigned)strays,
+    Serial.printf("Piece library: deleted %u files of pieces the index didn't list (%u KB)\n", (unsigned)strays,
                   (unsigned)(strayBytes / 1024));
   }
 }
@@ -106,6 +122,11 @@ bool PieceLibrary::available() const
 std::string PieceLibrary::path(const std::string &id)
 {
   return std::string(PIECES_DIR) + "/" + id + ".mid";
+}
+
+std::string PieceLibrary::editsPath(const std::string &id)
+{
+  return std::string(EDITS_DIR) + "/" + id + ".json";
 }
 
 std::vector<PieceInfo> PieceLibrary::list() const
@@ -235,6 +256,7 @@ bool PieceLibrary::remove(const std::string &id)
       pieces.erase(pieces.begin() + i);
       writeIndex();
       fs.remove(path(id).c_str());
+      fs.remove(editsPath(id).c_str());
       return true;
     }
   }

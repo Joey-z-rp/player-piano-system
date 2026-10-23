@@ -48,13 +48,20 @@ $("backup-button").addEventListener("click", async () => {
     const [config, offsets, library] = await Promise.all([
       getJson("/api/config"), getJson("/api/offsets"), getJson("/api/library")]);
     const names = fileNames(library.pieces);
+    // Each piece's note edits, with its settings.
+    const edits = [];
+    for (const [i, piece] of library.pieces.entries()) {
+      say(status, `Reading note edits ${i + 1} of ${library.pieces.length}…`);
+      const reply = await getJson("/api/library/edits?id=" + piece.id);
+      edits.push({ notes: reply.notes, pedal: reply.pedal });
+    }
     const settings = {
       format: FORMAT,
       version: 1,
       made: new Date().toISOString(),
       config: config.config,
       offsets: { keys: offsets.keys },
-      library: library.pieces.map((piece, i) => ({ ...piece, file: names[i] })),
+      library: library.pieces.map((piece, i) => ({ ...piece, file: names[i], ...(edits[i].notes.length || edits[i].pedal.length ? { edits: edits[i] } : {}) })),
     };
     const files = [{ name: "settings.json", data: new TextEncoder().encode(JSON.stringify(settings, null, 1)) }];
     if ($("with-pieces").checked) {
@@ -166,7 +173,10 @@ $("restore-button").addEventListener("click", async () => {
         if (!response.ok) throw new Error(reply.error || String(response.status));
         if (reply.library === "full") throw new Error("the library is full");
         await postJson("/api/library/details", { ...piece, id: reply.piece.id });
-        return reply.library === "already" ? "already there: name and settings restored" : "added";
+        if (piece.edits) await postJson("/api/library/edits", { id: reply.piece.id, ...piece.edits });
+        const edited = piece.edits ? piece.edits.notes.length + piece.edits.pedal.length : 0;
+        const what = edited ? `settings and ${edited} ${edited === 1 ? "edit" : "edits"}` : "settings";
+        return reply.library === "already" ? `already there: name and ${what} restored` : `added, with its ${what}`;
       });
     }
   }

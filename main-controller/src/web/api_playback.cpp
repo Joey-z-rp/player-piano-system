@@ -145,7 +145,8 @@ static void handleMidiUpload(AsyncWebServerRequest *request, PianoController &pi
   std::shared_ptr<PianoRoll> roll;
   int status;
   std::string error;
-  if (!loadPiece(piano, data, length, piece.name, &piece, roll, status, error))
+  if (!loadPiece(piano, data, length, piece.name, &piece, known ? library.readEdits(piece.id) : nullptr, roll, status,
+                 error))
   {
     sendError(request, status, error.c_str());
     return;

@@ -33,8 +33,10 @@ namespace
   // at the same moment as the sounding note (two voices sharing it, or a
   // duplicate in the file) is one strike, at the louder velocity; it goes in
   // doubled, for the report.
+  // pedalSource: each pedal change's time in the MIDI, at its own tempo.
   void collectNotesAndPedal(const std::vector<MidiEvent> &events, uint16_t speed, uint16_t mutedParts,
-                            std::vector<Note> &notes, std::vector<RollEvent> &pedal, std::vector<Doubled> &doubled,
+                            std::vector<Note> &notes, std::vector<RollEvent> &pedal,
+                            std::vector<uint32_t> &pedalSource, std::vector<Doubled> &doubled,
                             std::vector<Note> &muted, PianoRoll &roll)
   {
     const size_t NO_NOTE = SIZE_MAX;
@@ -60,14 +62,14 @@ namespace
         {
           // Left out, for the report only: until its note-off (below).
           muted.push_back({timeMs, UINT32_MAX, key, 0, 0, timeMs, UINT32_MAX, event.value, NOTE_MUTED, 0, false,
-                           event.part, false});
+                           event.part, false, event.timeMs, 0});
           break;
         }
         if (soundingNote[key] != NO_NOTE && notes[soundingNote[key]].writtenOnMs == timeMs)
         {
           Note &first = notes[soundingNote[key]];
           Note copy = {timeMs, UINT32_MAX, key, 0, 0, timeMs, 0, event.value, 0, timeMs, false,
-                       event.part, false};
+                       event.part, false, event.timeMs, 0};
           if (event.value == first.writtenVelocity)
           {
             copy.changes = NOTE_DUPLICATE;
@@ -95,7 +97,7 @@ namespace
           notes[soundingNote[key]].offMs = timeMs;
         }
         notes.push_back({timeMs, UINT32_MAX, key, event.value, 0, timeMs, 0, event.value, 0, 0, false,
-                         event.part, false});
+                         event.part, false, event.timeMs, 0});
         soundingNote[key] = notes.size() - 1;
         if (heldCount[key] < 255)
         {
@@ -142,6 +144,7 @@ namespace
         {
           sustain = on;
           pedal.push_back({timeMs, on ? RollEventType::SustainOn : RollEventType::SustainOff, 0, 0, false, false, 0, 0});
+          pedalSource.push_back(event.timeMs);
         }
         break;
       }
@@ -161,12 +164,108 @@ namespace
       {
         note.offMs = endMs;
       }
-      note.writtenOffMs = note.offMs;
+      note.writtenOffMs = note.aimOffMs = note.offMs;
     }
     for (Doubled &copy : doubled)
     {
       copy.note.writtenOffMs = notes[copy.original].writtenOffMs;
     }
+  }
+
+  // ms as written, at speed (a length or shift).
+  int32_t spanAtSpeed(int32_t ms, uint16_t speed)
+  {
+    return speed == 100 || speed == 0 ? ms : (int32_t)lround((double)ms * 100 / speed);
+  }
+
+  // Hand edits (NoteEdits), in two steps: a velocity change before the
+  // dynamics shape the velocities, and a length and shift, at speed, after.
+  // A note moved onto or past another on its key is then separated (or
+  // merged) like any repeat.
+  void editVelocities(std::vector<Note> &notes, const NoteEdits &edits)
+  {
+    for (Note &note : notes)
+    {
+      const NoteEdit *edit = edits.find(note.key, note.sourceMs);
+      if (edit != nullptr)
+      {
+        note.changes |= NOTE_EDITED;
+        note.velocity = (uint8_t)std::min(127, std::max(1, note.velocity + edit->velocity));
+      }
+    }
+  }
+
+  void editTiming(std::vector<Note> &notes, const NoteEdits &edits, uint16_t speed)
+  {
+    for (Note &note : notes)
+    {
+      const NoteEdit *edit = edits.find(note.key, note.sourceMs);
+      if (edit == nullptr || (edit->shiftMs == 0 && edit->lengthMs == 0))
+      {
+        continue;
+      }
+      int64_t on = (int64_t)note.onMs + spanAtSpeed(edit->shiftMs, speed);
+      int64_t off = (int64_t)note.offMs + spanAtSpeed(edit->shiftMs + edit->lengthMs, speed);
+      note.onMs = (uint32_t)std::max<int64_t>(0, on);
+      note.offMs = note.aimOffMs = (uint32_t)std::max<int64_t>(note.onMs + 1, off);
+    }
+  }
+
+  // Hand edits to the pedal (NoteEdits::pedal): each press, named by when it
+  // goes down in the MIDI, put down or lifted (at speed) earlier or later, or
+  // left out. Presses that then overlap are joined into one. A press never
+  // lifted stays down to the end.
+  std::vector<RollEvent> editPedal(const std::vector<RollEvent> &pedal, const std::vector<uint32_t> &source,
+                                   const NoteEdits &edits, uint16_t speed)
+  {
+    struct Press
+    {
+      int64_t downMs, upMs;
+      bool lifted;
+    };
+    std::vector<Press> presses;
+    for (size_t i = 0; i < pedal.size(); i++)
+    {
+      if (pedal[i].type != RollEventType::SustainOn)
+      {
+        continue;
+      }
+      bool lifted = i + 1 < pedal.size();
+      Press press = {pedal[i].timeMs, lifted ? pedal[i + 1].timeMs : pedal[i].timeMs + 1, lifted};
+      const PedalEdit *edit = edits.findPedal(source[i]);
+      if (edit != nullptr)
+      {
+        if (edit->removed)
+        {
+          continue;
+        }
+        press.downMs = std::max<int64_t>(0, press.downMs + spanAtSpeed(edit->downMs, speed));
+        press.upMs = std::max<int64_t>(press.downMs + 1, press.upMs + spanAtSpeed(edit->upMs, speed));
+      }
+      presses.push_back(press);
+    }
+    std::stable_sort(presses.begin(), presses.end(), [](const Press &a, const Press &b) { return a.downMs < b.downMs; });
+    std::vector<Press> joined;
+    for (const Press &press : presses)
+    {
+      if (!joined.empty() && press.downMs <= joined.back().upMs)
+      {
+        joined.back().upMs = std::max(joined.back().upMs, press.upMs);
+        joined.back().lifted = joined.back().lifted && press.lifted;
+        continue;
+      }
+      joined.push_back(press);
+    }
+    std::vector<RollEvent> out;
+    for (const Press &press : joined)
+    {
+      out.push_back({(uint32_t)press.downMs, RollEventType::SustainOn, 0, 0, false, false, 0, 0});
+      if (press.lifted)
+      {
+        out.push_back({(uint32_t)press.upMs, RollEventType::SustainOff, 0, 0, false, false, 0, 0});
+      }
+    }
+    return out;
   }
 
   // Which notes play as pedal-down, from the velocity table's pedal entries
@@ -306,15 +405,18 @@ namespace
     return kept;
   }
 
-  // Pedal changes (alternating, starting with on) as spans, moved back by lead.
-  void pedalSpans(const std::vector<RollEvent> &changes, uint32_t lead, uint32_t endMs, std::vector<PedalSpan> &spans)
+  // Pedal changes (alternating, starting with on) as spans, moved back by
+  // lead; with source (each change's time in the MIDI), named by it.
+  void pedalSpans(const std::vector<RollEvent> &changes, uint32_t lead, uint32_t endMs, std::vector<PedalSpan> &spans,
+                  const std::vector<uint32_t> *source = nullptr)
   {
-    for (const RollEvent &change : changes)
+    for (size_t i = 0; i < changes.size(); i++)
     {
+      const RollEvent &change = changes[i];
       uint32_t timeMs = change.timeMs - lead;
       if (change.type == RollEventType::SustainOn)
       {
-        spans.push_back({timeMs, endMs});
+        spans.push_back({timeMs, endMs, source != nullptr ? (*source)[i] : 0});
       }
       else if (!spans.empty())
       {
@@ -332,21 +434,22 @@ namespace
     for (const Note &note : muted)
     {
       report.notes.push_back({note.writtenOnMs, note.writtenOffMs, 0, 0, 0, note.key, note.writtenVelocity, 0,
-                              note.part, note.changes});
+                              note.part, note.changes, note.sourceMs});
     }
     for (const Note &note : notes)
     {
       NoteReport out = {note.writtenOnMs, note.writtenOffMs, 0, 0, note.mergedIntoMs, note.key, note.writtenVelocity,
-                        note.velocity, note.part, note.changes};
+                        note.velocity, note.part, note.changes, note.sourceMs};
       if (note.velocity != 0)
       {
         out.playedOnMs = note.onMs + note.landingMs - lead;
         out.playedOffMs = note.offMs - lead;
-        if (out.playedOffMs < out.writtenOffMs)
+        // Against when it's meant to be released (an edit can move that).
+        if (out.playedOffMs < note.aimOffMs)
         {
           out.changes |= NOTE_SHORTENED;
         }
-        else if (out.playedOffMs > out.writtenOffMs && !(note.changes & NOTE_ABSORBED))
+        else if (out.playedOffMs > note.aimOffMs && !(note.changes & NOTE_ABSORBED))
         {
           out.changes |= NOTE_LENGTHENED;
         }
@@ -357,7 +460,7 @@ namespace
     {
       const Note &note = copy.note;
       report.notes.push_back({note.writtenOnMs, note.writtenOffMs, 0, 0, note.mergedIntoMs, note.key,
-                              note.writtenVelocity, 0, note.part, note.changes});
+                              note.writtenVelocity, 0, note.part, note.changes, note.sourceMs});
     }
     std::stable_sort(report.notes.begin(), report.notes.end(),
                      [](const NoteReport &a, const NoteReport &b)
@@ -390,7 +493,8 @@ bool buildPianoRoll(const std::vector<MidiEvent> &events, PianoRoll &roll, const
 }
 
 bool buildPianoRoll(const std::vector<MidiEvent> &events, PianoRoll &roll, const VelocityTable *timing,
-                    const Dynamics &dynamics, RollReport *report, const PlayConfig *playConfig)
+                    const Dynamics &dynamics, RollReport *report, const PlayConfig *playConfig,
+                    const NoteEdits *edits)
 {
   static const PlayConfig DEFAULTS;
   const PlayConfig &config = playConfig != nullptr ? *playConfig : DEFAULTS;
@@ -411,16 +515,30 @@ bool buildPianoRoll(const std::vector<MidiEvent> &events, PianoRoll &roll, const
   {
     std::vector<Note> notes;
     std::vector<RollEvent> pedal;
+    std::vector<uint32_t> pedalSource;
     std::vector<Doubled> doubled;
     std::vector<Note> muted;
-    collectNotesAndPedal(events, dynamics.speed, dynamics.mutedParts, notes, pedal, doubled, muted, roll);
+    collectNotesAndPedal(events, dynamics.speed, dynamics.mutedParts, notes, pedal, pedalSource, doubled, muted, roll);
     uint32_t endMs = events.empty() ? 0 : atSpeed(events.back().timeMs, dynamics.speed);
     if (report != nullptr)
     {
-      pedalSpans(pedal, 0, endMs, report->writtenPedal);
+      pedalSpans(pedal, 0, endMs, report->writtenPedal, &pedalSource);
+    }
+    if (edits != nullptr && !edits->pedal.empty())
+    {
+      pedal = editPedal(pedal, pedalSource, *edits, dynamics.speed);
     }
     std::vector<RollEvent> played = spacePedal(pedal, config);
+    bool editing = edits != nullptr && !edits->edits.empty();
+    if (editing)
+    {
+      editVelocities(notes, *edits);
+    }
     shapeVelocities(notes, dynamics);
+    if (editing)
+    {
+      editTiming(notes, *edits, dynamics.speed);
+    }
     if (timing != nullptr && timing->hasLanding())
     {
       markPedal(notes, played, *timing, config);

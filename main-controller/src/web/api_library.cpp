@@ -38,7 +38,8 @@ void registerLibraryRoutes(AsyncWebServer &server, PianoController &piano, Piece
         std::shared_ptr<PianoRoll> roll;
         int status;
         std::string error;
-        if (!loadPiece(piano, data.data(), data.size(), piece.name, &piece, roll, status, error))
+        if (!loadPiece(piano, data.data(), data.size(), piece.name, &piece, library.readEdits(piece.id), roll, status,
+                       error))
         {
           sendError(request, status, error.c_str());
           return;

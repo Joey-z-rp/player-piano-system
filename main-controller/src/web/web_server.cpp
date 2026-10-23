@@ -2,6 +2,7 @@
 #include "web/api_config.h"
 #include "web/api_driver.h"
 #include "web/api_dynamics.h"
+#include "web/api_edits.h"
 #include "web/api_piece.h"
 #include "web/api_library.h"
 #include "web/api_offsets.h"
@@ -62,6 +63,7 @@ bool WebServerModule::begin(PianoController &piano, PieceLibrary &library, WiFiS
   registerOffsetRoutes(server, piano);
   registerDriverRoutes(server, piano);
   registerPlaybackRoutes(server, piano, library);
+  registerEditRoutes(server, piano, library); // before the library and piece routes
   registerLibraryRoutes(server, piano, library);
   registerPieceRoutes(server, piano);
   registerDynamicsRoutes(server, piano, library);

@@ -24,11 +24,13 @@ namespace roll_notes
     uint32_t writtenOnMs;
     uint32_t writtenOffMs;
     uint8_t writtenVelocity;
-    uint8_t changes;       // NoteChange flags
+    uint16_t changes;      // NoteChange flags
     uint32_t mergedIntoMs; // merged notes: when the strike they're held in is written
     bool pedal;            // the sustain pedal is down when it's written to sound
     uint8_t part;          // see MidiEvent::part
     bool repeat;           // struck within PlayConfig::repeatWindowMs of the last strike on its key
+    uint32_t sourceMs;     // its note-on in the MIDI, at its own tempo (NoteEdit::atMs)
+    uint32_t aimOffMs;     // when it's meant to be released: as written, or as edited
   };
 
   // A note-on at the same moment as another on its key, played as that one.

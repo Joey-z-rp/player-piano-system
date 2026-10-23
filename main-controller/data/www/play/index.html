@@ -66,6 +66,7 @@
           <div class="row">
             <button class="btn btn-sm btn-icon" id="zoom-out" type="button" aria-label="Zoom out"></button>
             <button class="btn btn-sm btn-icon" id="zoom-in" type="button" aria-label="Zoom in"></button>
+            <button class="btn btn-sm" id="edit-notes" type="button" aria-pressed="false">Edit notes</button>
           </div>
           <div class="row changes">
             <label class="small muted" for="change-kind">Changes</label>
@@ -75,6 +76,32 @@
           </div>
         </div>
         <p class="change-text small" id="change-text"></p>
+        <div class="note-edit" id="note-edit" hidden>
+          <p class="small" id="note-edit-head"></p>
+          <div class="note-edit-fields" id="note-edit-fields" hidden>
+            <div class="field"><span class="field-label">Velocity</span>
+              <span class="stepper"><button class="btn btn-sm btn-icon" type="button" data-step="-1" aria-label="Softer">−</button><input class="input input-sm num" type="number" id="edit-velocity" min="-126" max="126" step="1"><button class="btn btn-sm btn-icon" type="button" data-step="1" aria-label="Louder">+</button></span>
+              <span class="hint">added, before the volume</span></div>
+            <div class="field"><span class="field-label">Length (ms)</span>
+              <span class="stepper"><button class="btn btn-sm btn-icon" type="button" data-step="-1" aria-label="Shorter">−</button><input class="input input-sm num" type="number" id="edit-length" min="-5000" max="5000" step="10"><button class="btn btn-sm btn-icon" type="button" data-step="1" aria-label="Longer">+</button></span>
+              <span class="hint">+ held longer</span></div>
+            <div class="field"><span class="field-label">Timing (ms)</span>
+              <span class="stepper"><button class="btn btn-sm btn-icon" type="button" data-step="-1" aria-label="Earlier">−</button><input class="input input-sm num" type="number" id="edit-shift" min="-1000" max="1000" step="5"><button class="btn btn-sm btn-icon" type="button" data-step="1" aria-label="Later">+</button></span>
+              <span class="hint">− earlier, + later</span></div>
+            <button class="btn btn-ghost btn-sm edit-reset" type="button">Reset this note</button>
+          </div>
+          <div class="note-edit-fields" id="pedal-edit-fields" hidden>
+            <div class="field"><span class="field-label">Press (ms)</span>
+              <span class="stepper"><button class="btn btn-sm btn-icon" type="button" data-step="-1" aria-label="Press earlier">−</button><input class="input input-sm num" type="number" id="edit-pedal-down" min="-2000" max="2000" step="10"><button class="btn btn-sm btn-icon" type="button" data-step="1" aria-label="Press later">+</button></span>
+              <span class="hint">− down earlier, + later</span></div>
+            <div class="field"><span class="field-label">Lift (ms)</span>
+              <span class="stepper"><button class="btn btn-sm btn-icon" type="button" data-step="-1" aria-label="Lift earlier">−</button><input class="input input-sm num" type="number" id="edit-pedal-up" min="-2000" max="2000" step="10"><button class="btn btn-sm btn-icon" type="button" data-step="1" aria-label="Lift later">+</button></span>
+              <span class="hint">− lifted earlier, + later</span></div>
+            <label class="switch small"><input type="checkbox" id="edit-pedal-removed"> Leave this press out</label>
+            <button class="btn btn-ghost btn-sm edit-reset" type="button">Reset this press</button>
+          </div>
+          <p class="small muted" id="note-edit-status"></p>
+        </div>
       </section>
 
       <!-- How it's played -->
@@ -167,5 +194,6 @@
 <script src="/play/velocities.js"></script>
 <script src="/play/library.js"></script>
 <script src="/play/app.js"></script>
+<script src="/play/note-edit.js"></script>
 </body>
 </html>

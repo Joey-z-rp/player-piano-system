@@ -24,8 +24,10 @@ void describePiece(const std::vector<MidiEvent> &events, PieceInfo &piece);
 
 // Builds a piece from a MIDI file and loads it to play, with the settings it
 // was last played with if it's in the library (saved; else its written
-// speed and parts). On failure, status is the HTTP status and error why.
+// speed and parts) and its note edits (null: none). On failure, status is
+// the HTTP status and error why.
 bool loadPiece(PianoController &piano, const uint8_t *data, size_t length, const std::string &title,
-               const PieceInfo *saved, std::shared_ptr<PianoRoll> &roll, int &status, std::string &error);
+               const PieceInfo *saved, std::shared_ptr<const NoteEdits> edits, std::shared_ptr<PianoRoll> &roll,
+               int &status, std::string &error);
 
 #endif // PIECE_LOADER_H

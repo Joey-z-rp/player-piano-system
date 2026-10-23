@@ -182,6 +182,11 @@ public:
   bool setSpeed(uint16_t percent);
   // Everything a piece is shaped by, as it is now: applies from the next Play.
   Dynamics dynamics() const;
+  // The loaded piece's note edits (note_edits.h; null: none). Like the
+  // dynamics, new ones apply from the next Play; loading a piece takes the
+  // ones it was built with.
+  std::shared_ptr<const NoteEdits> noteEdits() const;
+  void setNoteEdits(std::shared_ptr<const NoteEdits> edits);
   // The timing rules pieces are played with (the config page), saved on the
   // controller; they apply from the next Play. setPlayConfig reads JSON (see
   // readPlayConfig) over the current settings.
@@ -261,6 +266,7 @@ private:
   mutable std::mutex rollMutex;
   std::shared_ptr<const PianoRoll> loadedRoll;
   std::shared_ptr<const PianoRoll> testRoll; // waiting to be played (playTest)
+  std::shared_ptr<const NoteEdits> currentEdits; // with rollMutex
   std::atomic<bool> testing;
   std::atomic<bool> updating;
   std::atomic<PlaybackState> state;

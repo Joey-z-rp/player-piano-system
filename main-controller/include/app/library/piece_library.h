@@ -2,15 +2,18 @@
 #define PIECE_LIBRARY_H
 
 #include <LittleFS.h>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <vector>
 #include "app/library/library_index.h"
+#include "app/piano/note_edits.h"
 
 // The pieces uploaded to the play page, kept on their own flash partition
 // ("library" in partitions.csv) so uploadfs never touches them: each file as
-// /pieces/<id>.mid, and an index of their names, sizes and remembered
-// settings. Every call is safe from any task.
+// /pieces/<id>.mid, an index of their names, sizes and remembered settings,
+// and each one's note edits (if it has any) as /edits/<id>.json. Every call
+// is safe from any task.
 class PieceLibrary
 {
 public:
@@ -44,12 +47,18 @@ public:
   // Its settings, to play it with next time: the dynamics, with partOffset
   // for its first `parts` parts.
   void saveSettings(const std::string &id, const Dynamics &dynamics, size_t parts);
+  // Its note edits (piece_edits.cpp): null if it has none (or isn't saved).
+  std::shared_ptr<const NoteEdits> readEdits(const std::string &id) const;
+  // Replaces them (none: the file goes). False if the piece isn't saved or
+  // they couldn't be written.
+  bool saveEdits(const std::string &id, const NoteEdits &edits);
 
   size_t usedBytes() const;
   size_t totalBytes() const;
   // For serving a piece's file.
   fs::FS &files();
   static std::string path(const std::string &id);
+  static std::string editsPath(const std::string &id);
 
 private:
   bool writeIndex(); // with the mutex held
