@@ -69,13 +69,16 @@ function showBusy() {
   showButtons();
 }
 
-// Play waits while the piece is being built or the settings are on their way.
+// Play waits only while the controller is building the piece or loading
+// one, not for the note view (just a display: the controller builds the
+// piece itself at Play) or a slider change on its way (sent first, at once).
 let hasPiece = false;
+let sending = false; // a Play or Pause on its way: a second click waits for it
 function showButtons() {
   fileInput.disabled = playing || paused || uploading;
   document.getElementById("add-piece").setAttribute("aria-disabled", String(fileInput.disabled));
-  playButton.disabled = !hasPiece || (!playing && (controllerBuilding || notesLoading || uploading || dynamicsChanging));
-  playButton.innerHTML = icon(playing ? "pause" : "play");
+  playButton.disabled = !hasPiece || sending || (!playing && (controllerBuilding || uploading));
+  playButton.innerHTML = sending ? '<span class="spinner"></span>' : icon(playing ? "pause" : "play");
   playButton.setAttribute("aria-label", playing ? "Pause" : paused ? "Resume" : "Play");
   stopButton.disabled = !playing && !paused;
   stateChip.textContent = playing ? "Playing" : paused ? "Paused" : hasPiece ? "Ready" : "No piece";
@@ -256,14 +259,22 @@ fileInput.addEventListener("change", async () => {
 // ---- playing ----
 async function playOrPause() {
   if (playButton.disabled) return;
+  sending = true;
+  showButtons();
+  let done;
   if (playing) {
-    await ui.request("/api/playback/pause", { method: "POST" });
+    done = await ui.request("/api/playback/pause", { method: "POST" });
+    if (done) [playing, paused] = [false, true]; // until the status says so
   } else {
+    await sendDynamicsNow(); // a slider just moved: it's played with that
     // Paused, it goes on from where it stopped (or from where the bar was moved to).
     const from = !paused && startFrom > 0 ? `?from=${startFrom}&speed=${pieceSpeed}` : "";
-    await ui.request("/api/playback/play" + from, { method: "POST" });
+    done = await ui.request("/api/playback/play" + from, { method: "POST" });
+    if (done) [playing, paused] = [true, false];
     loadLibrary(); // its last played
   }
+  sending = false;
+  showButtons();
   ui.refreshStatus();
 }
 playButton.addEventListener("click", playOrPause);
@@ -310,22 +321,31 @@ function showDynamics() {
   repeatBoostValue.textContent = "+" + repeatBoost.value;
 }
 
+// Sent 300 ms after the last change, or at once when Play is pressed.
 let dynamicsTimer;
+let dynamicsSending = null; // the request on its way
+async function sendDynamics() {
+  clearTimeout(dynamicsTimer);
+  dynamicsSending = ui.request("/api/dynamics", { json: settings() });
+  const saved = await dynamicsSending;
+  dynamicsSending = null;
+  dynamicsChanging = false;
+  showButtons();
+  if (saved) {
+    noteView.load(); // merges and limits depend on the velocities
+    volumeNote.textContent = playing ? "The new settings apply from the next Play, or after a pause." : "";
+  }
+}
+async function sendDynamicsNow() {
+  if (dynamicsSending) await dynamicsSending;
+  else if (dynamicsChanging) await sendDynamics();
+}
 function dynamicsChanged() {
   dynamicsChanging = true;
-  showButtons();
   showDynamics();
   drawVelocities();
   clearTimeout(dynamicsTimer);
-  dynamicsTimer = setTimeout(async () => {
-    const saved = await ui.request("/api/dynamics", { json: settings() });
-    dynamicsChanging = false;
-    showButtons();
-    if (saved) {
-      noteView.load(); // merges and limits depend on the velocities
-      volumeNote.textContent = playing ? "The new settings apply from the next Play, or after a pause." : "";
-    }
-  }, 300);
+  dynamicsTimer = setTimeout(sendDynamics, 300);
 }
 
 [speed, volume, contrast, voicing, repeatBoost].forEach((slider) => slider.addEventListener("input", dynamicsChanged));

@@ -60,6 +60,34 @@ void writeStatus(JsonObject doc, PianoController &piano, WiFiStationModule &wifi
 
 void registerStatusRoutes(AsyncWebServer &server, PianoController &piano, WiFiStationModule &wifi, OtaUpdates &ota)
 {
+  // GET /api/heat -> every solenoid's estimated heat, for the Keys page's heat
+  // view: {"limitC", "resumeLoad", "keys": [rise °C of key 0-87, or null if
+  // its coil isn't measured], "pedal": [the pedal's two, likewise]}.
+  server.on("/api/heat", HTTP_GET, [&piano](AsyncWebServerRequest *request) {
+    float rises[HEAT_CHANNELS];
+    bool watched[HEAT_CHANNELS];
+    float limitC;
+    piano.heatRises(rises, watched, limitC);
+    JsonDocument doc;
+    doc["limitC"] = limitC;
+    doc["resumeLoad"] = HEAT_RESUME_LOAD;
+    JsonArray keys = doc["keys"].to<JsonArray>();
+    JsonArray pedal = doc["pedal"].to<JsonArray>();
+    for (uint8_t channel = 0; channel < HEAT_CHANNELS; channel++)
+    {
+      JsonArray into = channel < FIRST_PEDAL_CHANNEL ? keys : pedal;
+      if (watched[channel])
+      {
+        into.add(roundf(rises[channel] * 10) / 10);
+      }
+      else
+      {
+        into.add(nullptr);
+      }
+    }
+    sendJson(request, 200, doc);
+  });
+
   server.on("/api/status", HTTP_GET, [&piano, &wifi, &ota](AsyncWebServerRequest *request) {
     JsonDocument doc;
     writeStatus(doc.to<JsonObject>(), piano, wifi, ota);

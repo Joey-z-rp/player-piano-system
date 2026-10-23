@@ -52,7 +52,7 @@ namespace
     }
     if (!valid)
     {
-      error = std::string(name) + " must be the command's settings, e.g. 100:30:100:30:55";
+      error = std::string(name) + " must be the command's settings, e.g. 70:20:100:40:40";
       return false;
     }
     strcpy(out, text);

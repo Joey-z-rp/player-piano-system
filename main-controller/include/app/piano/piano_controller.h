@@ -161,6 +161,9 @@ public:
     uint8_t actionChannel = 0;
   };
   HeatStatus heatStatus() const;
+  // Every solenoid's estimated rise (°C; 0-87 the keys, 88-89 the pedal),
+  // whether each is watched (its coil measured), and the limit.
+  void heatRises(float rises[HEAT_CHANNELS], bool watched[HEAT_CHANNELS], float &limitC) const;
   // True while the loaded piece is being rebuilt (for new settings or speed).
   bool building() const;
   size_t pendingCommands() const;

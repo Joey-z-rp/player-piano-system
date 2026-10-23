@@ -172,16 +172,24 @@ const ui = (() => {
 
   // ---- the API ----
   // Resolves with the reply's JSON; rejects with an Error saying why.
-  async function api(url, { method, json, body, headers } = {}) {
+  // An upload (a body that's a file) gets longer than the rest to answer.
+  async function api(url, { method, json, body, headers, timeoutMs } = {}) {
     let response;
+    const controller = new AbortController();
+    const wait = timeoutMs ?? (body instanceof Blob ? 60000 : 8000);
+    const timer = setTimeout(() => controller.abort(), wait);
     try {
       response = await fetch(url, {
         method: method || (json !== undefined || body !== undefined ? "POST" : "GET"),
         headers: json !== undefined ? { "Content-Type": "application/json", ...headers } : headers,
         body: json !== undefined ? JSON.stringify(json) : body,
+        signal: controller.signal,
       });
     } catch {
-      throw new Error("Couldn't reach the piano");
+      throw new Error(controller.signal.aborted ? "The piano didn't answer: check its Wi-Fi, then try again"
+        : "Couldn't reach the piano");
+    } finally {
+      clearTimeout(timer);
     }
     const reply = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(reply.error || `The piano replied ${response.status}`);
@@ -277,7 +285,8 @@ const ui = (() => {
   function heatText(heat) {
     const name = (channel) => (channel >= 88 ? "the pedal solenoids" : `${keyName(channel)}'s solenoid`);
     const minutes = (s) => (s < 60 ? "under a minute" : `about ${Math.ceil(s / 60)} min`);
-    const degrees = (c) => `${c.toFixed(0)} °C`;
+    // Rises above the room, not temperatures: "+46 °C".
+    const degrees = (c) => `+${c.toFixed(0)} °C`;
     const stopped = { paused: "Paused", testStopped: "Test stopped", released: "Let go" }[heat.action];
     return {
       hot: Boolean(stopped),
@@ -286,9 +295,9 @@ const ui = (() => {
         ? `${stopped}: ${name(heat.actionChannel)} reached the heat limit. Play can go on once ` +
           `${heat.actionChannel >= 88 ? "they've" : "it's"} cooled, in ${minutes(heat.coolS)}.`
         : `${name(heat.channel)[0].toUpperCase() + name(heat.channel).slice(1)} ${heat.channel >= 88 ? "are" : "is"} warm: ` +
-          `${degrees(heat.riseC)} of the ${degrees(heat.limitC)} allowed. Play waits until under ` +
+          `${degrees(heat.riseC)} above the room, of the ${degrees(heat.limitC)} allowed. Play waits until under ` +
           `${degrees(heat.limitC * heat.resumeLoad)}, in ${minutes(heat.coolS)}.`,
-      line: `Warmest solenoid: ${name(heat.channel)}, ${degrees(heat.riseC)} of ${degrees(heat.limitC)}`,
+      line: `Warmest solenoid: ${name(heat.channel)}, ${degrees(heat.riseC)} above the room (limit ${degrees(heat.limitC)})`,
     };
   }
   function showBanners() {

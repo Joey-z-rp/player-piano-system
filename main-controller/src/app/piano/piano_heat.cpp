@@ -91,3 +91,14 @@ void PianoController::clearHeatAction()
   std::lock_guard<std::mutex> lock(heatMutex);
   heatAction = HeatAction::None;
 }
+
+void PianoController::heatRises(float rises[HEAT_CHANNELS], bool watched[HEAT_CHANNELS], float &limitC) const
+{
+  std::lock_guard<std::mutex> lock(heatMutex);
+  for (uint8_t channel = 0; channel < HEAT_CHANNELS; channel++)
+  {
+    rises[channel] = heat.riseC(channel);
+    watched[channel] = heat.watched(channel);
+  }
+  limitC = heat.settings().limitC;
+}

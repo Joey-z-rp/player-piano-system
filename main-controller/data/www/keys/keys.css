@@ -68,3 +68,14 @@ table.points input { width: 6em; }
 .history .btn { font-family: var(--mono); font-size: var(--text-xs); }
 .log { max-height: 18em; overflow-y: auto; background: var(--surface-2); padding: var(--space-3); border-radius: var(--radius-sm);
   font-size: var(--text-xs); color: var(--text-2); min-height: 3em; }
+
+/* The heat view: each key tinted by its solenoid's estimated heat (--heat,
+   set by heat.js), and a bar with the scale, the warmest key and the pedal. */
+.keyboard.show-heat [data-key]::before { content: ""; position: absolute; inset: 0; border-radius: inherit;
+  background: var(--heat, transparent); pointer-events: none; }
+.heat-bar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-4); margin-top: var(--space-3); color: var(--text-2); }
+.heat-scale { display: inline-flex; align-items: center; gap: var(--space-2); }
+.heat-scale i { width: 90px; height: 8px; border-radius: 4px; display: inline-block;
+  background: linear-gradient(to right, hsla(55, 95%, 55%, .15), hsla(28, 95%, 52%, .6), hsla(0, 90%, 48%, .95)); }
+.heat-chip { display: inline-flex; align-items: center; gap: 6px; }
+.heat-chip i { width: 12px; height: 12px; border-radius: 3px; border: 1px solid var(--border-strong); display: inline-block; }

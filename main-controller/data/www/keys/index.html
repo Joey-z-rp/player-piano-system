@@ -35,6 +35,7 @@
         <label><input type="radio" name="style" value="press"><span>Hold while pressed</span></label>
         <label><input type="radio" name="style" value="strike"><span>Strike</span></label>
       </div>
+      <label class="switch small"><input type="checkbox" id="show-heat"> Heat</label>
       <span class="spacer"></span>
       <div class="segmented" role="radiogroup" aria-label="Keys shown">
         <label><input type="radio" name="zoom" value="all"><span>88 keys</span></label>
@@ -45,6 +46,7 @@
     <div class="keyboard-scroll" id="keyboard-scroll">
       <div class="keyboard" id="keyboard" role="group" aria-label="Keyboard"></div>
     </div>
+    <div class="heat-bar small" id="heat-bar" hidden></div>
   </section>
 
   <div class="keys-grid">
@@ -178,5 +180,6 @@
 <script src="/keys/app.js"></script>
 <script src="/keys/key-info.js"></script>
 <script src="/keys/listen.js"></script>
+<script src="/keys/heat.js"></script>
 </body>
 </html>

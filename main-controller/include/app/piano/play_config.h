@@ -25,7 +25,7 @@ struct ClampSettings
 };
 
 static const uint8_t MAX_REPEAT_LIMITS = 8;
-static const size_t PEDAL_COMMAND_LENGTH = 24;
+static const size_t PEDAL_COMMAND_LENGTH = 40; // with "P:88:", within DRIVER_COMMAND_MAX_LENGTH: room for all 3 phases
 
 // The timing rules pieces are played with: how long notes are held, how
 // soon a key can strike again, and the pedal. Chosen by ear on the config
@@ -62,9 +62,13 @@ struct PlayConfig
   // The sustain pedal.
   uint16_t pedalSettleMs = 100; // how long it takes to lift the dampers after it's sent down
   uint16_t pedalMinMs = 100;    // shortest time between its changes
-  // Its press and release commands (after "P:<channel>:"), sent to both its solenoids.
-  char pedalPress[PEDAL_COMMAND_LENGTH] = "100:30:100:30:55";
-  char pedalRelease[PEDAL_COMMAND_LENGTH] = "40:40:30:40:0";
+  // Its press and release commands (after "P:<channel>:"), sent to both its
+  // solenoids. The press eases the plunger onto its stop (quiet), and holds
+  // at 40%: fully seated it holds with far less heat than the 55% it took
+  // when it wasn't (calibration/heat_tests.json). The release lets it up in
+  // steps, for a quiet landing too.
+  char pedalPress[PEDAL_COMMAND_LENGTH] = "70:20:100:40:40";
+  char pedalRelease[PEDAL_COMMAND_LENGTH] = "30:30:20:30:15:15:0";
 
   // Solenoid heat (see HeatModel): the supply, each kind of coil (0s until
   // measured: not watched), and the rise allowed. A piece pauses at the

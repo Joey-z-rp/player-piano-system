@@ -81,6 +81,10 @@ void test_pedal_commands()
                            error.c_str());
   TEST_ASSERT_EQUAL_STRING("90:40:55", config.pedalPress);
   TEST_ASSERT_EQUAL_STRING("0", config.pedalRelease);
+  // All three phases fit; longer than PEDAL_COMMAND_LENGTH doesn't.
+  TEST_ASSERT_TRUE_MESSAGE(read(config, "{\"pedal_press\":\"100:25:60:20:45:20:35:20:30\"}", error), error.c_str());
+  TEST_ASSERT_EQUAL_STRING("100:25:60:20:45:20:35:20:30", config.pedalPress);
+  TEST_ASSERT_FALSE(read(config, "{\"pedal_press\":\"100:25:60:20:45:20:35:20:30:10:10:10:10:10\"}", error));
 }
 
 void test_heat_settings()
