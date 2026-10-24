@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Live · Player piano</title>
+<meta name="theme-color" content="#f6f5f1" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#121212" media="(prefers-color-scheme: dark)">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Piano">
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/assets/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/assets/icon-180.png">
+<script>try { var t = localStorage.getItem("theme"); if (t) document.documentElement.dataset.theme = t; } catch (e) {}</script>
+<link rel="stylesheet" href="/assets/app.css">
+<link rel="stylesheet" href="/live/live.css">
+</head>
+<body data-section="live">
+<main class="page">
+  <div class="page-head">
+    <div>
+      <h1>Live</h1>
+      <p>Play a MIDI keyboard plugged into this computer, and the piano plays along a moment later.</p>
+    </div>
+  </div>
+
+  <div class="live-grid">
+    <!-- The keyboard and playing -->
+    <section class="card live-main">
+      <div class="callout" id="midi-problem" hidden></div>
+      <div class="live-row">
+        <label class="field grow"><span class="field-label">MIDI keyboard</span>
+          <select class="input" id="midi-input"></select></label>
+        <button class="btn btn-primary live-start" type="button" id="live-start">Start playing live</button>
+      </div>
+      <div class="live-state">
+        <span class="chip" id="live-state">Not playing</span>
+        <span class="small muted" id="live-stats"></span>
+      </div>
+      <p class="small warn-text" id="live-warning" hidden></p>
+      <canvas class="live-keys" id="live-keys" aria-label="What's being played"></canvas>
+      <p class="tiny faint" id="midi-hint"></p>
+    </section>
+
+    <div class="live-side">
+      <!-- The delay -->
+      <section class="card">
+        <div class="slider-row">
+          <label for="delay">Delay on the piano</label>
+          <output id="delay-out"></output>
+          <input type="range" id="delay" min="50" max="1000" step="10">
+          <span class="hint">The piano plays everything this long after you play it, so soft and loud notes
+            sound together and Wi-Fi hiccups don't break the rhythm. Shorter feels closer; too short and notes
+            arrive late.</span>
+        </div>
+      </section>
+
+      <!-- Sound here -->
+      <section class="card">
+        <div class="card-head"><h2>Sound on this computer</h2><span class="spacer"></span>
+          <label class="switch"><input type="checkbox" id="local-sound"> <span class="sr-only">Sound on this computer</span></label>
+        </div>
+        <div class="slider-row">
+          <label for="local-volume">Volume</label>
+          <output id="local-volume-out"></output>
+          <input type="range" id="local-volume" min="0" max="100" step="1">
+        </div>
+        <p class="small muted">A simple piano sound, so you hear what you play straight away. Turn it off if your
+          keyboard makes its own.</p>
+      </section>
+    </div>
+  </div>
+</main>
+<script src="/assets/app.js"></script>
+<script src="/live/synth.js"></script>
+<script src="/live/app.js"></script>
+</body>
+</html>

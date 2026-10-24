@@ -1,0 +1,18 @@
+/* The Live page: the keyboard and playing on the left, the delay and the
+   sound here on the right (below on narrow screens). */
+.live-grid { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: var(--space-4); align-items: start; }
+.live-side { display: flex; flex-direction: column; gap: var(--space-4); }
+@media (max-width: 900px) {
+  .live-grid { grid-template-columns: minmax(0, 1fr); }
+}
+.live-main { display: flex; flex-direction: column; gap: var(--space-3); }
+.live-row { display: flex; flex-wrap: wrap; gap: var(--space-3); align-items: flex-end; }
+.live-row .grow { flex: 1; min-width: 200px; display: flex; flex-direction: column; gap: 4px; }
+.live-start { min-width: 11rem; }
+.live-state { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; min-height: 24px; }
+.live-keys { display: block; width: 100%; border-radius: var(--radius-sm); }
+.callout { padding: var(--space-3) var(--space-4); border-radius: var(--radius); background: var(--warn-soft);
+  color: var(--text); line-height: 1.5; }
+.callout ol { margin: var(--space-2) 0 0; padding-left: 1.4em; }
+.callout code { background: var(--surface); padding: 1px 5px; border-radius: 4px; font-size: .92em; user-select: all; }
+#live-warning[hidden] { display: none; }

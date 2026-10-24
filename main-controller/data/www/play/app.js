@@ -56,6 +56,7 @@ let controllerBuilding = false;
 let libraryBusy = false; // playing or paused: no loading another piece
 let uploading = false;
 let notesLoading = false;
+let liveNow = false; // playing live (the Live page): Play waits
 // Over the note view when it's showing, else in the player.
 function showBusy() {
   const text = uploading ? "Loading the piece…"
@@ -77,7 +78,7 @@ let sending = false; // a Play or Pause on its way: a second click waits for it
 function showButtons() {
   fileInput.disabled = playing || paused || uploading;
   document.getElementById("add-piece").setAttribute("aria-disabled", String(fileInput.disabled));
-  playButton.disabled = !hasPiece || sending || (!playing && (controllerBuilding || uploading));
+  playButton.disabled = !hasPiece || sending || liveNow || (!playing && (controllerBuilding || uploading));
   playButton.innerHTML = sending ? '<span class="spinner"></span>' : icon(playing ? "pause" : "play");
   playButton.setAttribute("aria-label", playing ? "Pause" : paused ? "Resume" : "Play");
   stopButton.disabled = !playing && !paused;
@@ -394,6 +395,7 @@ function show(status, receivedAt) {
   const heat = status.heat;
   heatLine.textContent = heat && heat.watched && heat.load < heat.resumeLoad ? ui.heatText(heat).line : "";
   controllerBuilding = Boolean(playback.building);
+  liveNow = playback.state === "live";
   const wasActive = playing || paused;
   const wasPlaying = playing;
   playing = playback.state === "playing";

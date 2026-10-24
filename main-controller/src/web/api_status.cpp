@@ -29,13 +29,14 @@ void writeStatus(JsonObject doc, PianoController &piano, WiFiStationModule &wifi
     heatJson["resumeLoad"] = HEAT_RESUME_LOAD;
     heatJson["coolS"] = (int)ceilf(heat.coolS);
   }
-  static const char *const ACTIONS[] = {"none", "paused", "testStopped", "released"};
+  static const char *const ACTIONS[] = {"none", "paused", "testStopped", "released", "liveStopped"};
   heatJson["action"] = ACTIONS[(int)heat.action];
   heatJson["actionChannel"] = heat.actionChannel;
 
   PlaybackStatus playback = piano.status();
   JsonObject playbackJson = doc["playback"].to<JsonObject>();
-  playbackJson["state"] = playback.testing                          ? "testing"
+  playbackJson["state"] = playback.live                             ? "live"
+                          : playback.testing                        ? "testing"
                           : playback.state == PlaybackState::Playing ? "playing"
                           : playback.state == PlaybackState::Paused ? "paused"
                                                                     : "idle";

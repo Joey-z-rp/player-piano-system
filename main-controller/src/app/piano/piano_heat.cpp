@@ -25,7 +25,12 @@ void PianoController::watchHeat()
     return;
   }
   HeatAction action;
-  if (state == PlaybackState::Playing && !testing)
+  if (live)
+  {
+    endLive(LiveEnd::TooHot); // lets every key and the pedal go
+    action = HeatAction::LiveStopped;
+  }
+  else if (state == PlaybackState::Playing && !testing)
   {
     pausePlayback(); // lets every key and the pedal go
     action = HeatAction::Paused;
@@ -56,6 +61,7 @@ void PianoController::watchHeat()
   Serial.printf("Solenoid %u at its heat limit (%.0f °C rise): %s\n", hot, heat.riseC(hot),
                 action == HeatAction::Paused        ? "paused the piece"
                 : action == HeatAction::TestStopped ? "stopped the test"
+                : action == HeatAction::LiveStopped ? "stopped live play"
                                                      : "released it");
 }
 

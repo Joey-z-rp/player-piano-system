@@ -74,6 +74,10 @@ bool buildPianoRoll(const std::vector<MidiEvent> &events, PianoRoll &roll, const
 bool buildPianoRoll(const std::vector<MidiEvent> &events, PianoRoll &roll, const VelocityTable *timing = nullptr,
                     uint16_t volume = 100, RollReport *report = nullptr);
 
+// Whether a key can strike again intervalMs after the note before it
+// (velocity first) sounded, at velocity second, by config's repeat limits.
+bool canRepeatAt(const PlayConfig &config, uint8_t first, uint8_t second, int32_t intervalMs);
+
 // Notes starting within this long of a group's first note are one chord, for voicing.
 static const uint32_t CHORD_WINDOW_MS = 40;
 

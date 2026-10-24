@@ -90,7 +90,7 @@ PlaybackResult PianoController::play(uint32_t fromMs, uint16_t atSpeed)
       return PlaybackResult::NoRoll;
     }
   }
-  if (state == PlaybackState::Playing)
+  if (state == PlaybackState::Playing || live)
   {
     return PlaybackResult::Busy;
   }
@@ -113,7 +113,7 @@ PlaybackResult PianoController::play(uint32_t fromMs, uint16_t atSpeed)
 
 PlaybackResult PianoController::playTest(std::shared_ptr<const PianoRoll> roll)
 {
-  if (state != PlaybackState::Idle && !testing)
+  if ((state != PlaybackState::Idle && !testing) || live)
   {
     return PlaybackResult::Busy;
   }
@@ -141,7 +141,7 @@ void PianoController::beginUpdate()
   stop();
   // The player task does the stop: give it a moment, as the update's writes
   // to flash hold everything up.
-  for (int i = 0; i < 20 && state != PlaybackState::Idle; i++)
+  for (int i = 0; i < 20 && (state != PlaybackState::Idle || live); i++)
   {
     delay(10);
   }
@@ -207,6 +207,7 @@ PlaybackStatus PianoController::status() const
   PlaybackStatus result;
   result.state = state;
   result.testing = testing;
+  result.live = live;
   // Before playStartMs while the pedal settles at a start part way through.
   int32_t positionMs = (int32_t)(millis() - playStartMs);
   switch (result.state)
@@ -266,6 +267,10 @@ void PianoController::run()
       int64_t dueUs = startUs + (int64_t)playingRoll->events[nextEvent].timeMs * 1000;
       int64_t remainingUs = dueUs - esp_timer_get_time();
       wait = remainingUs <= 0 ? 0 : pdMS_TO_TICKS((remainingUs + 999) / 1000);
+    }
+    if (live)
+    {
+      playDueLive(wait);
     }
 
     if (wait > pdMS_TO_TICKS(HEAT_TICK_MS))
@@ -352,7 +357,11 @@ void PianoController::handleMessage(const Message &message)
     }
     break;
   case MessageType::Stop:
-    if (state != PlaybackState::Idle)
+    if (live)
+    {
+      endLive(LiveEnd::Stopped);
+    }
+    else if (state != PlaybackState::Idle)
     {
       finishPlayback();
     }
@@ -361,6 +370,18 @@ void PianoController::handleMessage(const Message &message)
       releaseAll(); // also clears keys left on by manual commands
     }
     break;
+  case MessageType::LiveStart:
+    clearHeatAction();
+    releaseAll();
+    break;
+  case MessageType::LiveStop:
+    if (live)
+    {
+      endLive(LiveEnd::Stopped);
+    }
+    break;
+  case MessageType::LiveWake:
+    break; // the loop works out what's due
   case MessageType::ResetDrivers:
     if (state != PlaybackState::Idle)
     {

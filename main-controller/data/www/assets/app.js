@@ -2,7 +2,7 @@
 // mini-player, banners), icons, messages, dialogs and menus, the API, and the
 // live status from the controller (/api/events, else polling /api/status).
 // Pages put their content in <main class="page"> and say which section they
-// are with <body data-section="play|keys|settings">; this script is loaded
+// are with <body data-section="play|keys|live|settings">; this script is loaded
 // before theirs.
 const ui = (() => {
   // ---- icons (24 px, drawn with the current colour) ----
@@ -35,6 +35,7 @@ const ui = (() => {
     pedal: '<path d="M5 19h14M8 19l2.5-10h3L16 19"/><path d="M10.5 9h3V5h-3z"/>',
     volume: '<path d="M4 9.5h3.5L12 6v12l-4.5-3.5H4z"/><path d="M15.5 9a4 4 0 0 1 0 6M18 6.5a7.5 7.5 0 0 1 0 11"/>',
     mute: '<path d="M4 9.5h3.5L12 6v12l-4.5-3.5H4z"/><path d="M16 9.5l5 5M21 9.5l-5 5"/>',
+    live: '<circle cx="12" cy="12" r="2"/><path d="M7.8 7.8a6 6 0 0 0 0 8.4M16.2 7.8a6 6 0 0 1 0 8.4M4.9 4.9a10 10 0 0 0 0 14.2M19.1 4.9a10 10 0 0 1 0 14.2"/>',
   };
   function icon(name, label) {
     const a11y = label ? `role="img" aria-label="${label}"` : 'aria-hidden="true"';
@@ -261,6 +262,7 @@ const ui = (() => {
   const SECTIONS = [
     { id: "play", label: "Play", href: "/play/", icon: "music" },
     { id: "keys", label: "Keys", href: "/keys/", icon: "keys" },
+    { id: "live", label: "Live", href: "/live/", icon: "live" },
     { id: "settings", label: "Settings", href: "/settings/", icon: "settings" },
   ];
   const section = document.body.dataset.section || "";
@@ -287,7 +289,7 @@ const ui = (() => {
     const minutes = (s) => (s < 60 ? "under a minute" : `about ${Math.ceil(s / 60)} min`);
     // Rises above the room, not temperatures: "+46 °C".
     const degrees = (c) => `+${c.toFixed(0)} °C`;
-    const stopped = { paused: "Paused", testStopped: "Test stopped", released: "Let go" }[heat.action];
+    const stopped = { paused: "Paused", testStopped: "Test stopped", released: "Let go", liveStopped: "Live play stopped" }[heat.action];
     return {
       hot: Boolean(stopped),
       cooling: heat.load >= heat.resumeLoad,
@@ -359,12 +361,12 @@ const ui = (() => {
       if (!piece) return;
       const playing = playback.state === "playing";
       title.textContent = piece.title;
-      state.textContent = { playing: "Playing", paused: "Paused", testing: "Testing keys" }[playback.state] ||
+      state.textContent = { playing: "Playing", paused: "Paused", testing: "Testing keys", live: "Playing live" }[playback.state] ||
         `Ready · ${formatTime(piece.durationMs)}`;
       if (playing || playback.state === "paused") state.textContent += ` · ${formatTime(playback.positionMs)} / ${formatTime(piece.durationMs)}`;
       playButton.innerHTML = icon(playing ? "pause" : "play");
       playButton.setAttribute("aria-label", playing ? "Pause" : playback.state === "paused" ? "Resume" : "Play");
-      playButton.disabled = playback.building || playback.state === "testing";
+      playButton.disabled = playback.building || playback.state === "testing" || playback.state === "live";
       stopButton.disabled = playback.state === "idle";
       bar.style.width = `${Math.min(100, (100 * playback.positionMs) / Math.max(piece.durationMs, 1))}%`;
     });

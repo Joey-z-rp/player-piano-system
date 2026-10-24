@@ -33,11 +33,16 @@ std::string WebServerModule::statusJson()
 void WebServerModule::poll()
 {
   uint32_t now = millis();
-  if (piano == nullptr || now - lastCheckMs < STREAM_CHECK_MS || events.count() == 0)
+  if (piano == nullptr || now - lastCheckMs < STREAM_CHECK_MS)
   {
     return;
   }
   lastCheckMs = now;
+  live.poll();
+  if (events.count() == 0)
+  {
+    return;
+  }
   std::string json = statusJson();
   bool changed = json != lastSent;
   if ((changed && now - lastSentMs >= STREAM_MIN_MS) || now - lastSentMs >= STREAM_HEARTBEAT_MS)
@@ -69,6 +74,7 @@ bool WebServerModule::begin(PianoController &piano, PieceLibrary &library, WiFiS
   registerDynamicsRoutes(server, piano, library);
   registerStatusRoutes(server, piano, wifi, ota);
   registerSystemRoutes(server, wifi, ota);
+  live.begin(server, piano);
 
   // The live status: each page gets it at once on connecting, then as it changes.
   events.onConnect([this](AsyncEventSourceClient *client) { client->send(statusJson().c_str(), "status", 0, 2000); });

@@ -3,6 +3,7 @@
 
 #include <ESPAsyncWebServer.h>
 #include <string>
+#include "web/live_socket.h"
 
 class PianoController;
 class OtaUpdates;
@@ -26,6 +27,7 @@ private:
   // "status" events, whenever it changes (at most every STREAM_MIN_MS) and at
   // least every STREAM_HEARTBEAT_MS, so the pages don't poll.
   AsyncEventSource events;
+  LiveSocket live; // the Live page's connection (/ws/live)
   PianoController *piano = nullptr;
   WiFiStationModule *wifi = nullptr;
   OtaUpdates *ota = nullptr;

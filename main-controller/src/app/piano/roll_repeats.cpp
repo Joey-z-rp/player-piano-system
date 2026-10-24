@@ -7,34 +7,34 @@
 #include <algorithm>
 #include <new>
 
+// Whether a key can strike again intervalMs after the note before (velocity
+// first) sounded, at velocity second (roll_builder.h).
+bool canRepeatAt(const PlayConfig &config, uint8_t first, uint8_t second, int32_t intervalMs)
+{
+  for (uint8_t i = 0; i < config.repeatLimitCount; i++)
+  {
+    const RepeatLimit &limit = config.repeatLimits[i];
+    if (second < limit.from)
+    {
+      continue;
+    }
+    bool afterLoud = first >= config.repeatLoudFrom;
+    if (intervalMs < (afterLoud ? limit.afterLoudMs : limit.afterSoftMs))
+    {
+      return false;
+    }
+    return afterLoud || second < config.deadZoneFromVelocity || second > config.deadZoneToVelocity ||
+           intervalMs < config.deadZoneFromMs || intervalMs >= config.deadZoneToMs;
+  }
+  return false;
+}
+
 namespace
 {
   using namespace roll_notes;
 
   // The timing rules (how long notes are held, how soon a key can strike
   // again, the pedal) come from a PlayConfig: see play_config.h.
-
-  // Whether a key can strike again intervalMs after the note before
-  // (velocity first) sounded, at velocity second.
-  bool canRepeat(const PlayConfig &config, uint8_t first, uint8_t second, int32_t intervalMs)
-  {
-    for (uint8_t i = 0; i < config.repeatLimitCount; i++)
-    {
-      const RepeatLimit &limit = config.repeatLimits[i];
-      if (second < limit.from)
-      {
-        continue;
-      }
-      bool afterLoud = first >= config.repeatLoudFrom;
-      if (intervalMs < (afterLoud ? limit.afterLoudMs : limit.afterSoftMs))
-      {
-        return false;
-      }
-      return afterLoud || second < config.deadZoneFromVelocity || second > config.deadZoneToVelocity ||
-             intervalMs < config.deadZoneFromMs || intervalMs >= config.deadZoneToMs;
-    }
-    return false;
-  }
 
   // When a note's hammer hits the string, on the roll's timeline.
   uint32_t soundsMs(const Note &note)
@@ -74,7 +74,7 @@ namespace
 
 namespace roll_notes
 {
-  // A key can strike again once canRepeat allows it (how soon was measured on
+  // A key can strike again once canRepeatAt allows it (how soon was measured on
   // this piano, and depends mostly on how loud the repeat is). It's released
   // restrikeGapMs before the next press where there's time, but never
   // sooner than minNoteMs after its hammer lands: for a close repeat, that's
@@ -125,7 +125,7 @@ namespace roll_notes
           uint32_t sounds = soundsMs(note);
           uint32_t onMs = sounds - std::min(sounds, landing);
           uint32_t pressMs = onMs - std::min<uint32_t>(onMs, config.repeatLateMs);
-          if (canRepeat(config, kept->velocity, louder, interval) && pressMs > earliestRelease)
+          if (canRepeatAt(config, kept->velocity, louder, interval) && pressMs > earliestRelease)
           {
             note.velocity = louder;
             note.landingMs = landing;
@@ -134,7 +134,7 @@ namespace roll_notes
           }
         }
         uint32_t pressMs = repeat ? note.onMs - std::min<uint32_t>(note.onMs, config.repeatLateMs) : note.onMs;
-        if (!canRepeat(config, kept->velocity, note.velocity, interval) || pressMs <= earliestRelease)
+        if (!canRepeatAt(config, kept->velocity, note.velocity, interval) || pressMs <= earliestRelease)
         {
           mergeRepeat(*kept, note, before, config);
           roll.mergedNotes++;

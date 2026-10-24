@@ -11,6 +11,7 @@
 #include <vector>
 #include "app/piano/piano_roll.h"
 #include "app/piano/key_offsets.h"
+#include "app/piano/live_player.h"
 #include "app/piano/play_config.h"
 
 class Rs485Module;
@@ -92,6 +93,7 @@ struct PlaybackStatus
 {
   PlaybackState state;
   bool testing; // playing a test (playTest), not the loaded piece
+  bool live;    // playing live (startLive)
   uint32_t positionMs;
   std::shared_ptr<const PianoRoll> roll; // null when nothing is loaded
 };
@@ -137,6 +139,35 @@ public:
   PlaybackResult setPedal(bool down);
   PlaybackStatus status() const;
 
+  // Live play (live_player.h): MIDI from the Live page, played a fixed
+  // delay after it was played. A session starts with every key and the
+  // pedal let go, and ends (everything let go again) on stopLive, Stop, an
+  // update, the heat limit, or LIVE_TIMEOUT_MS without a word from the
+  // sender. Busy while a piece or test is playing or paused; Play and tests
+  // are Busy while it's on. Safe to call from any task.
+  enum class LiveEnd : uint8_t
+  {
+    None,
+    Stopped,
+    TimedOut,
+    TooHot
+  };
+  struct LiveStatus
+  {
+    bool active = false;
+    uint16_t delayMs = 0;
+    uint32_t late = 0; // notes too late for the delay, played at once
+    LiveEnd ended = LiveEnd::None; // why the last session ended
+  };
+  PlaybackResult startLive(uint16_t delayMs);
+  // A MIDI message the sender got at senderMs (its clock).
+  void liveMessage(uint32_t senderMs, uint8_t status, uint8_t data1, uint8_t data2);
+  // The sender's clock now (its pings), which also keeps the session alive.
+  void liveClock(uint32_t senderMs);
+  void setLiveDelay(uint16_t delayMs);
+  void stopLive();
+  LiveStatus liveStatus() const;
+
   // The solenoids' estimated heat (HeatModel, from the play config's coil
   // settings): the one nearest its limit, and what was last done about one
   // reaching it. A piece pauses at the limit (a test stops; a key or pedal
@@ -147,7 +178,8 @@ public:
     None,
     Paused,      // the piece
     TestStopped,
-    Released     // the channel, held by a manual command
+    Released,    // the channel, held by a manual command
+    LiveStopped  // live play
   };
   struct HeatStatus
   {
@@ -220,7 +252,10 @@ private:
     PedalDown,
     PedalUp,
     Rebuild, // for a new speed, when nothing is playing
-    PlayTest
+    PlayTest,
+    LiveStart,
+    LiveStop,
+    LiveWake // something new to play live
   };
 
   struct Message
@@ -235,6 +270,11 @@ private:
   bool post(const Message &message);
   void run();
   void handleMessage(const Message &message);
+  // Live play (piano_live.cpp), on the player task.
+  void playDueLive(TickType_t &wait);
+  void sendLiveAction(const LiveAction &action);
+  void endLive(LiveEnd why);
+  void wakeForLive();
   void startPlayback(uint32_t fromMs, uint16_t atSpeed);
   void resumePlayback(uint32_t fromMs, uint16_t atSpeed);
   uint32_t toLoadedSpeed(uint32_t ms, uint16_t atSpeed) const;
@@ -267,6 +307,13 @@ private:
   std::shared_ptr<const PianoRoll> loadedRoll;
   std::shared_ptr<const PianoRoll> testRoll; // waiting to be played (playTest)
   std::shared_ptr<const NoteEdits> currentEdits; // with rollMutex
+  mutable std::mutex liveMutex;
+  LivePlayer livePlayer;   // with liveMutex
+  PlayConfig liveConfig;   // the session's, with liveMutex
+  std::atomic<bool> live{false};
+  std::atomic<uint32_t> liveHeardMs{0};
+  std::atomic<LiveEnd> liveEnded{LiveEnd::None};
+  std::vector<LiveAction> liveDue; // owned by the player task
   std::atomic<bool> testing;
   std::atomic<bool> updating;
   std::atomic<PlaybackState> state;
