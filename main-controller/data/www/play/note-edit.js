@@ -24,32 +24,135 @@
     { input: $("edit-pedal-up"), max: 2000, step: 10 },
   ];
   const removedBox = $("edit-pedal-removed");
-  const SEND_AFTER_MS = 600; // after the last change, so a few clicks make one rebuild
+  const SAVE_AFTER_MS = 300;   // a run of clicks is saved once
+  const BUILD_AFTER_MS = 2000; // the notes are built again once editing pauses this long
+  const RETRY_AFTER_MS = 3000;
 
   let editing = false;
-  let edits = new Map(); // "key/source" -> [key, source ms, velocity, length ms, shift ms]
-  let pedalEdits = new Map(); // source ms -> [source ms, down ms, up ms, removed 0/1]
+  // The edits as set here, as the controller has them (last read or saved),
+  // and as the notes on show were built with: each {notes: Map "key/source"
+  // -> [key, source ms, velocity, length ms, shift ms], pedal: Map source ms
+  // -> [source ms, down ms, up ms, removed 0/1]}.
+  let edits = new Map(), pedalEdits = new Map();
+  const none = () => ({ notes: new Map(), pedal: new Map() });
+  const copy = () => ({ notes: new Map(edits), pedal: new Map(pedalEdits) });
+  let server = none(), shown = none();
   let saved = true; // kept with the piece in the library
   let current = null; // the note or pedal press ({pedal: true, ...}) being edited
-  let changed = false; // edits not sent yet
-  let sending = false;
-  let sendTimer = 0;
+  let version = 0, savedVersion = 0; // changes made here, and saved
+  let saving = false, saveFailed = false, building = false, buildWanted = false;
+  let saveTimer = 0, buildTimer = 0;
+  let loadingWith = null, loadingWhileSaving = false, freshPiece = true;
   const idOf = (key, source) => `${key}/${source}`;
   const seconds = (ms) => `${(ms / 1000).toFixed(2)} s`;
 
-  async function fetchEdits() {
+  // The controller's edits. Unless force (another piece), not over changes
+  // made here that it doesn't have yet.
+  async function fetchEdits(force = false) {
+    let reply;
     try {
-      const reply = await ui.api("/api/piece/edits");
-      if (changed || sending) return; // ours are newer
-      useReply(reply);
-    } catch { /* none loaded, or unreachable: keep what we had */ }
-  }
-
-  function useReply(reply) {
+      reply = await ui.api("/api/piece/edits");
+    } catch { return; /* none loaded, or unreachable: keep what we had */ }
+    if (!force && (saving || version !== savedVersion)) return;
     edits = new Map(reply.notes.map((e) => [idOf(e[0], e[1]), e]));
     pedalEdits = new Map(reply.pedal.map((e) => [e[0], e]));
     saved = reply.saved;
+    server = copy();
+    savedVersion = version;
   }
+
+  // ---- shown before they're built ----
+  const sameEdit = (a, b) => JSON.stringify(a || null) === JSON.stringify(b || null);
+  // Each edit not in the notes on show yet, drawn as set: velocity (at the
+  // volume) and times (at the speed) moved by the difference. The
+  // controller's rules (repeats, the pedal) apply when they're built.
+  function applyPreviews() {
+    const built = noteView.builtWith();
+    if (!built) return;
+    const atSpeed = 100 / built.speed, atVolume = (built.volume ?? 100) / 100;
+    const ids = new Set([...edits.keys(), ...shown.notes.keys()]);
+    for (const id of ids) {
+      const set = edits.get(id), was = shown.notes.get(id);
+      if (sameEdit(set, was)) continue;
+      const [key, source] = (set || was).slice(0, 2);
+      noteView.previewNote(key, source, (note) => {
+        const from = note.previewOf || was || [key, source, 0, 0, 0];
+        const to = set || [key, source, 0, 0, 0];
+        note.previewOf = to;
+        if (!note.playedVelocity) return; // merged or muted: as it'll play once built
+        note.playedVelocity = Math.min(127, Math.max(1, Math.round(note.playedVelocity + (to[2] - from[2]) * atVolume)));
+        const shift = (to[4] - from[4]) * atSpeed, length = (to[3] - from[3]) * atSpeed;
+        note.playedOn = Math.max(0, note.playedOn + shift);
+        note.playedOff = Math.max(note.playedOn + 1, note.playedOff + shift + length);
+      });
+    }
+    const presses = [];
+    for (const source of new Set([...pedalEdits.keys(), ...shown.pedal.keys()])) {
+      const set = pedalEdits.get(source), was = shown.pedal.get(source);
+      if (sameEdit(set, was)) continue;
+      const press = noteView.findPedal(source);
+      if (!press) continue;
+      const [, down, up, removed] = set || [source, 0, 0, 0];
+      presses.push({ down: press.down + down * atSpeed, up: press.up + up * atSpeed, removed: Boolean(removed) });
+    }
+    noteView.setPedalPreview(presses);
+  }
+
+  // ---- saving, then building ----
+  function scheduleSave(ms = SAVE_AFTER_MS) {
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(save, ms);
+  }
+  function scheduleBuild(ms = BUILD_AFTER_MS) {
+    buildWanted = true;
+    clearTimeout(buildTimer);
+    buildTimer = setTimeout(build, ms);
+  }
+
+  async function save() {
+    clearTimeout(saveTimer);
+    if (saving) {
+      scheduleSave(); // after the one on its way
+      return;
+    }
+    const sending = version, snapshot = copy();
+    saving = true;
+    draw();
+    const reply = await ui.request("/api/piece/edits",
+      { json: { notes: [...snapshot.notes.values()], pedal: [...snapshot.pedal.values()] } });
+    saving = false;
+    saveFailed = !reply;
+    if (reply) {
+      savedVersion = sending;
+      server = snapshot;
+      saved = reply.saved;
+    }
+    if (version !== savedVersion) scheduleSave(reply ? SAVE_AFTER_MS : RETRY_AFTER_MS);
+    draw();
+  }
+
+  // The notes as they'll now play: once everything's saved, without the
+  // busy overlay (editing can go on meanwhile).
+  async function build() {
+    clearTimeout(buildTimer);
+    if (saving || version !== savedVersion) {
+      buildTimer = setTimeout(build, SAVE_AFTER_MS);
+      return;
+    }
+    buildWanted = false;
+    building = true;
+    draw();
+    await noteView.load(false, { quiet: true });
+    building = false;
+    draw();
+  }
+
+  // Each load: what it's built with is what the controller has as it starts.
+  noteView.onLoadStart((fromStart) => {
+    if (fromStart) freshPiece = true;
+    loadingWith = { notes: new Map(server.notes), pedal: new Map(server.pedal) };
+    loadingWhileSaving = saving;
+  });
 
   // A note's edit, in words ("" for none).
   function describe(note) {
@@ -105,13 +208,16 @@
     const count = (n, one, many) => `${n} ${n === 1 ? one : many}`;
     const what = [edits.size ? count(edits.size, "note", "notes") : "", pedalEdits.size ? count(pedalEdits.size, "pedal press", "pedal presses") : ""]
       .filter(Boolean).join(" and ");
+    const unsaved = version !== savedVersion;
     const notes = [
-      sending ? "Saving…" : changed ? "Not saved yet…" : what ? `${what} edited` : "Nothing edited yet",
-      playingNow && (changed || sending || what) ? "changes apply from the next Play" : "",
+      what ? `${what} edited` : "Nothing edited yet",
+      saveFailed ? "couldn't save: trying again" : saving || unsaved ? "saving…" : "",
+      building ? "updating the notes…" : buildWanted ? "dashed: as you set them, until the notes update when you pause" : "",
+      playingNow && (unsaved || what) ? "changes apply from the next Play" : "",
       !saved ? "not kept: this piece isn't in the library" : "",
     ].filter(Boolean);
     status.replaceChildren(notes.join(" · "));
-    if (what && !sending) {
+    if (what) {
       status.append(" ", ui.el("button", { class: "btn btn-ghost btn-sm danger-text", type: "button", onclick: removeAll },
         "Remove all"));
     }
@@ -139,27 +245,16 @@
       if (values.every((v) => v === 0)) edits.delete(id);
       else edits.set(id, [current.key, current.source, ...values]);
     }
-    changed = true;
-    clearTimeout(sendTimer);
-    sendTimer = setTimeout(send, SEND_AFTER_MS);
-    draw();
+    changed();
   }
 
-  async function send() {
-    clearTimeout(sendTimer);
-    if (sending) {
-      sendTimer = setTimeout(send, SEND_AFTER_MS); // after the one on its way
-      return;
-    }
-    sending = true;
-    changed = false;
+  // After any change here: shown at once, saved soon, built once editing pauses.
+  function changed() {
+    version++;
+    applyPreviews();
+    scheduleSave();
+    scheduleBuild();
     draw();
-    const reply = await ui.request("/api/piece/edits", { json: { notes: [...edits.values()], pedal: [...pedalEdits.values()] } });
-    sending = false;
-    if (reply && !changed) useReply(reply);
-    if (!reply) changed = true; // kept here: the next change tries again
-    draw();
-    if (reply) noteView.load(); // the notes and pedal as they'll now play
   }
 
   async function removeAll() {
@@ -168,8 +263,7 @@
     if (!sure) return;
     edits.clear();
     pedalEdits.clear();
-    changed = true;
-    send();
+    changed();
   }
 
   [...NOTE_FIELDS, ...PEDAL_FIELDS].forEach((f) => {
@@ -195,6 +289,7 @@
     if (!editing) {
       current = null;
       noteView.select(null);
+      if (buildWanted) build(); // done editing: the notes as they'll play, now
     } else {
       fetchEdits().then(draw);
     }
@@ -212,7 +307,20 @@
       draw();
       return;
     }
-    await fetchEdits();
+    if (freshPiece) {
+      // Another piece (or the first): its own edits, and nothing pending.
+      freshPiece = false;
+      clearTimeout(saveTimer);
+      clearTimeout(buildTimer);
+      buildWanted = false;
+      await fetchEdits(true);
+      shown = copy();
+    } else {
+      shown = loadingWith || server;
+      // Saved during the load: it may not have them, so again in a moment.
+      if (loadingWhileSaving) scheduleBuild(SAVE_AFTER_MS);
+    }
+    applyPreviews();
     if (current) {
       current = current.pedal ? noteView.findPedal(current.source) : noteView.findNote(current.key, current.source);
       noteView.select(current);

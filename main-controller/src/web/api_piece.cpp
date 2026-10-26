@@ -1,5 +1,6 @@
 #include "web/api_piece.h"
 #include "web/api_response.h"
+#include "web/notes_reports.h"
 #include "app/midi/midi_parser.h"
 #include "app/piano/piano_controller.h"
 #include "app/piano/roll_builder.h"
@@ -99,7 +100,7 @@ private:
   size_t sent = 0;
 };
 
-void registerPieceRoutes(AsyncWebServer &server, PianoController &piano)
+void registerPieceRoutes(AsyncWebServer &server, PianoController &piano, NotesReports &reports)
 {
   // GET /api/piece/notes -> every note of the loaded piece as written and as
   // it's played (at the volume it's playing at, else the current one), to
@@ -112,28 +113,28 @@ void registerPieceRoutes(AsyncWebServer &server, PianoController &piano)
   // names)], ...], "playedPedal": [[down ms, up ms], ...]}. Times are on the MIDI's timeline; the playback
   // position is lead ms later. Registered before /api/piece, which would
   // also match it.
-  server.on("/api/piece/notes", HTTP_GET, [&piano](AsyncWebServerRequest *request) {
-    PlaybackStatus playback = piano.status();
-    std::shared_ptr<const PianoRoll> loaded = playback.roll;
-    if (loaded == nullptr || loaded->source == nullptr)
+  // Built in the background (NotesReports): until it's ready, 202
+  // {"building": true}, to ask again shortly.
+  server.on("/api/piece/notes", HTTP_GET, [&piano, &reports](AsyncWebServerRequest *request) {
+    if (piano.status().roll == nullptr)
     {
       sendError(request, 404, "no piece loaded");
       return;
     }
-    PianoRoll roll;
-    std::shared_ptr<RollReport> report = std::make_shared<RollReport>();
-    // While playing, the dynamics it's playing with; new ones apply from the
-    // next Play (or going on from a pause).
-    bool playing = playback.state == PlaybackState::Playing;
-    Dynamics dynamics = playing ? loaded->dynamics : piano.dynamics();
-    std::shared_ptr<const NoteEdits> edits = playing ? loaded->edits : piano.noteEdits();
-    PlayConfig rules = piano.playConfig();
-    if (!buildPianoRoll(*loaded->source, roll, piano.velocities(), dynamics, report.get(), &rules, edits.get()))
+    NotesReports::Ready ready;
+    if (!reports.get(ready))
+    {
+      AsyncWebServerResponse *response = request->beginResponse(202, "application/json", "{\"building\":true}");
+      response->addHeader("Cache-Control", "no-store");
+      request->send(response);
+      return;
+    }
+    if (ready.failed)
     {
       sendError(request, 500, "out of memory");
       return;
     }
-    std::shared_ptr<ReportWriter> writer = std::make_shared<ReportWriter>(report, roll.leadMs, dynamics);
+    std::shared_ptr<ReportWriter> writer = std::make_shared<ReportWriter>(ready.report, ready.leadMs, ready.dynamics);
     AsyncWebServerResponse *response = request->beginChunkedResponse(
         "application/json", [writer](uint8_t *buffer, size_t maxLen, size_t) { return writer->write(buffer, maxLen); });
     response->addHeader("Cache-Control", "no-store");

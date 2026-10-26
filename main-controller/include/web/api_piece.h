@@ -4,9 +4,10 @@
 #include <ESPAsyncWebServer.h>
 
 class PianoController;
+class NotesReports;
 
 // GET /api/piece and /api/piece/notes: the loaded piece's parts and
 // velocities, and every note as written and as played.
-void registerPieceRoutes(AsyncWebServer &server, PianoController &piano);
+void registerPieceRoutes(AsyncWebServer &server, PianoController &piano, NotesReports &reports);
 
 #endif // API_PIECE_H

@@ -13,3 +13,4 @@ calibration/envelopes/
 # Secrets and generated files
 secrets.ini
 include/firmware_version.h
+firmware-builds/

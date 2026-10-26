@@ -70,7 +70,11 @@ bool WebServerModule::begin(PianoController &piano, PieceLibrary &library, WiFiS
   registerPlaybackRoutes(server, piano, library);
   registerEditRoutes(server, piano, library); // before the library and piece routes
   registerLibraryRoutes(server, piano, library);
-  registerPieceRoutes(server, piano);
+  if (!notesReports.begin(piano))
+  {
+    Serial.println("Couldn't start the note view's builder");
+  }
+  registerPieceRoutes(server, piano, notesReports);
   registerDynamicsRoutes(server, piano, library);
   registerStatusRoutes(server, piano, wifi, ota);
   registerSystemRoutes(server, wifi, ota);

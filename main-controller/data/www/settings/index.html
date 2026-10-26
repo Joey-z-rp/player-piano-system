@@ -233,6 +233,16 @@
         <div class="card-head"><h2>About</h2></div>
         <p class="banner" id="firmware-warning" hidden></p>
         <dl class="facts-list" id="about-list"></dl>
+        <div class="crash" id="crash" hidden>
+          <h3 class="section-title">Last crash</h3>
+          <dl class="facts-list" id="crash-list"></dl>
+          <p class="small muted">To see where in the code it happened, run <code>python tools/crash_report.py</code> on the
+            computer that built the firmware.</p>
+          <div class="row">
+            <a class="btn btn-sm" id="crash-download" href="/api/system/crash" download>Download the crash report</a>
+            <button class="btn btn-ghost btn-sm" type="button" id="crash-clear">Clear it</button>
+          </div>
+        </div>
         <p class="small muted">Add this page to your phone's home screen to open it like an app.</p>
       </section>
     </div>

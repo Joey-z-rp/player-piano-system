@@ -32,9 +32,35 @@
       ["Address", `${wifi.ip} · piano.local`],
       ["Library", library ? `${library.pieces.length} pieces · ${mb(library.usedBytes)} of ${mb(library.totalBytes)} MB used` : "not available"],
     ];
-    document.getElementById("about-list").replaceChildren(...rows.flatMap(([term, value]) =>
+    const restart = system.restart || {};
+    const REASONS = { power: "power on", software: "a restart or update", crash: "a crash", watchdog: "the watchdog (a task held up too long)",
+      brownout: "the power dipping (brownout)", external: "the reset button", "deep sleep": "waking", unknown: "unknown" };
+    rows.push(["Last started by", REASONS[restart.reason] || restart.reason || "unknown"]);
+    if (restart.lastUnexpected && restart.lastUnexpected !== restart.reason) {
+      rows.push(["Last unexpected restart", REASONS[restart.lastUnexpected] || restart.lastUnexpected]);
+    }
+    const facts = (list, items) => document.getElementById(list).replaceChildren(...items.flatMap(([term, value]) =>
       [ui.el("dt", {}, term), ui.el("dd", {}, value)]));
+    facts("about-list", rows);
+    const crash = system.crash;
+    document.getElementById("crash").hidden = !crash;
+    if (crash) {
+      facts("crash-list", [
+        ["Task", crash.task],
+        ["What", (crash.cause || "stopped") + ` at ${crash.pc}`],
+        ["Firmware", crash.thisFirmware ? "this one" : `an earlier one (${crash.firmware.slice(0, 8)})`],
+        ["Backtrace", crash.backtrace.join(" ") + (crash.backtraceCorrupted ? " (cut short)" : "")],
+      ]);
+    }
   }
+  document.getElementById("crash-clear").addEventListener("click", async () => {
+    const sure = await ui.confirm({ title: "Clear the crash report?", message: "Download it first if it's still needed.",
+      confirm: "Clear", danger: true });
+    if (sure && await ui.request("/api/system/crash/clear", { method: "POST" })) {
+      ui.toast("Crash report cleared");
+      showAbout();
+    }
+  });
   showAbout();
 
   // ---- the section list follows the section in view ----

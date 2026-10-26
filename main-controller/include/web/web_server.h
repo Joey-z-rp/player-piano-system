@@ -4,6 +4,7 @@
 #include <ESPAsyncWebServer.h>
 #include <string>
 #include "web/live_socket.h"
+#include "web/notes_reports.h"
 
 class PianoController;
 class OtaUpdates;
@@ -28,6 +29,7 @@ private:
   // least every STREAM_HEARTBEAT_MS, so the pages don't poll.
   AsyncEventSource events;
   LiveSocket live; // the Live page's connection (/ws/live)
+  NotesReports notesReports; // the note view's, built in the background
   PianoController *piano = nullptr;
   WiFiStationModule *wifi = nullptr;
   OtaUpdates *ota = nullptr;

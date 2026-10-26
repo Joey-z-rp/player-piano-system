@@ -89,6 +89,9 @@ const noteView = (() => {
   let pedalEdited = () => false; // whether a pedal press (by its MIDI time) is edited
   let selectedPedal = null; // the pedal press being edited: {pedal: true, down, up, source}
   const loadedHandlers = [];
+  const loadStartHandlers = [];
+  let busyShown = false; // the busy overlay is up, for a load not finished yet
+  let pedalPreview = []; // pedal edits not built yet: [{down, up, removed}] on the view's timeline (before the lead)
   let loadingHandler = () => {};
   let loads = 0; // the latest load(): an earlier one that finishes after it is dropped
   // With more than one part (track), each note's outline shows which it's from.
@@ -203,10 +206,18 @@ const noteView = (() => {
       ctx.strokeStyle = partCount > 1 ? partColor(note.part) : COLORS.written;
       ctx.lineWidth = partCount > 1 ? 1.5 : 1;
       ctx.strokeRect(x + 0.5, y + 0.5, Math.max(xOf(note.writtenOff + shift, l) - x - 1, 1), l.rowHeight - 1);
-      if (note.changes & EDITED) {
+      if (note.changes & EDITED || note.pending) {
         // Edited by hand: a mark where it's played from.
         ctx.fillStyle = COLORS.edited;
         ctx.fillRect(playedX - 1, y - 1, 3, l.rowHeight + 2);
+      }
+      if (note.pending) {
+        // As set, not built yet: the controller's rules may still change it.
+        ctx.setLineDash([3, 2]);
+        ctx.strokeStyle = COLORS.edited;
+        ctx.lineWidth = 1.5;
+        ctx.strokeRect(playedX - 1.5, y - 0.5, Math.max(xOf(note.playedOff + shift, l) - playedX, 2) + 3, l.rowHeight + 1);
+        ctx.setLineDash([]);
       }
     }
     if (selected) {
@@ -239,6 +250,16 @@ const noteView = (() => {
     };
     band(data.writtenPedal, 0, false);
     band(data.playedPedal, 1, true);
+    // Pedal edits not built yet: where they'll be (dashed), or left out (dashed, red).
+    for (const press of pedalPreview) {
+      const x1 = xOf(press.down + shift, l), x2 = xOf(press.up + shift, l);
+      if (x2 < GUTTER || x1 > l.width) continue;
+      ctx.setLineDash([3, 2]);
+      ctx.strokeStyle = press.removed ? COLORS.merged : COLORS.edited;
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(x1, pedalTop + PEDAL_ROW + 1, Math.max(x2 - x1, 2), PEDAL_ROW - 2);
+      ctx.setLineDash([]);
+    }
     // Pedal presses edited by hand, and the one being edited.
     for (const [down, up, source] of data.writtenPedal) {
       const isSelected = selectedPedal && selectedPedal.source === source;
@@ -527,7 +548,8 @@ const noteView = (() => {
   return {
     // Loads the loaded piece's notes with the current dynamics; hides the view
     // without one. fromStart: a new piece, so the view goes back to its start.
-    async load(fromStart = false) {
+    // quiet: without the busy overlay (editing notes says so itself).
+    async load(fromStart = false, { quiet = false } = {}) {
       if (fromStart) {
         marker = 0;
         viewStart = -span * 0.25;
@@ -535,16 +557,31 @@ const noteView = (() => {
       }
       const before = data;
       const load = ++loads;
-      loadingHandler(true);
-      let fetched;
+      loadStartHandlers.forEach((handler) => handler(fromStart));
+      if (!quiet) {
+        busyShown = true;
+        loadingHandler(true);
+      }
+      // The controller builds them in the background: 202 until they're ready.
+      let fetched = null;
       try {
-        const response = await fetch("/api/piece/notes");
-        fetched = response.ok ? await response.json() : null;
+        for (const started = performance.now(); performance.now() - started < 60000;) {
+          const response = await fetch("/api/piece/notes", { cache: "no-store" });
+          if (load !== loads) return; // a newer load is under way
+          if (response.status !== 202) {
+            fetched = response.ok ? await response.json() : null;
+            break;
+          }
+          await new Promise((resolve) => setTimeout(resolve, 150));
+        }
       } catch (error) {
         fetched = null;
       }
       if (load !== loads) return; // a newer load is under way
-      loadingHandler(false);
+      if (busyShown) {
+        busyShown = false;
+        loadingHandler(false);
+      }
       data = fetched;
       // At a new speed, the view stays on the same point in the music.
       if (!fromStart && before && data && before.speed && data.speed && before.speed !== data.speed) {
@@ -606,6 +643,25 @@ const noteView = (() => {
     onLoaded(handler) {
       loadedHandlers.push(handler);
     },
+    // Called with fromStart as each load starts.
+    onLoadStart(handler) {
+      loadStartHandlers.push(handler);
+    },
+    // An edit shown before it's built: fn(note) changes the note as loaded
+    // (played on, off and velocity), which is then marked as not built yet.
+    previewNote(key, source, fn) {
+      const note = this.findNote(key, source);
+      if (!note) return;
+      fn(note);
+      note.pending = true;
+      redraw();
+    },
+    setPedalPreview(presses) {
+      pedalPreview = presses;
+      redraw();
+    },
+    // What the notes on show were built with.
+    builtWith: () => (data ? { volume: data.volume, speed: data.speed || 100 } : null),
     // Editing notes: clicks pick a note (handler(note), or null for none)
     // instead of where to play from; null goes back to that.
     onNoteClick(handler) {

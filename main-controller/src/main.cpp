@@ -5,6 +5,7 @@
 #include "app/piano/piano_controller.h"
 #include "app/piano/velocity_table.h"
 #include "firmware_info.h"
+#include "crash_report.h"
 #include "led_control.h"
 #include "ota_updates.h"
 #include "rs485.h"
@@ -65,6 +66,7 @@ void setup()
                 firmwareBuilt(), firmwareSlot(),
                 firmwareOnTrial() ? " (an update, on trial)" : firmwareRolledBack() ? " (an update was rolled back)"
                                                                                     : "");
+  beginCrashReport();
 
   Serial.println("Initializing LED control...");
   if (!ledControl.init())
